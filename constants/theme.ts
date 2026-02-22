@@ -1,41 +1,53 @@
-/**
- * Below are the colors that are used in the app. The colors are defined in the light and dark mode.
- * There are many other ways to style your app. For example, [Nativewind](https://www.nativewind.dev/), [Tamagui](https://tamagui.dev/), [unistyles](https://reactnativeunistyles.vercel.app), etc.
- */
-
 import { Platform } from 'react-native';
 
-const tintColorLight = '#0a7ea4';
-const tintColorDark = '#fff';
+// 디자인 가이드 기반 색상 토큰
+export const DesignTokens = {
+  primary: '#d1d0ec',     // 라벤더
+  accent: '#EDC7CF',      // 파스텔 핑크
+  bgLight: '#f6f6f7',
+  bgDark: '#15151d',
+};
 
 export const Colors = {
   light: {
     text: '#11181C',
-    background: '#fff',
-    tint: tintColorLight,
+    subText: '#6B7280',
+    background: DesignTokens.bgLight,
+    card: '#FFFFFF',
+    tint: DesignTokens.primary,
     icon: '#687076',
-    tabIconDefault: '#687076',
-    tabIconSelected: tintColorLight,
+    tabIconDefault: '#9CA3AF',
+    tabIconSelected: '#6B6BA8',
+    border: '#E5E7EB',
+    primary: DesignTokens.primary,
+    accent: DesignTokens.accent,
+    danger: '#EF4444',
+    switchTrackOn: DesignTokens.primary,
+    switchThumb: '#FFFFFF',
   },
   dark: {
     text: '#ECEDEE',
-    background: '#151718',
-    tint: tintColorDark,
+    subText: '#9CA3AF',
+    background: DesignTokens.bgDark,
+    card: '#1E1E2E',
+    tint: DesignTokens.primary,
     icon: '#9BA1A6',
-    tabIconDefault: '#9BA1A6',
-    tabIconSelected: tintColorDark,
+    tabIconDefault: '#6B7280',
+    tabIconSelected: DesignTokens.primary,
+    border: '#2D2D3D',
+    primary: DesignTokens.primary,
+    accent: DesignTokens.accent,
+    danger: '#EF4444',
+    switchTrackOn: DesignTokens.primary,
+    switchThumb: '#FFFFFF',
   },
 };
 
 export const Fonts = Platform.select({
   ios: {
-    /** iOS `UIFontDescriptorSystemDesignDefault` */
     sans: 'system-ui',
-    /** iOS `UIFontDescriptorSystemDesignSerif` */
     serif: 'ui-serif',
-    /** iOS `UIFontDescriptorSystemDesignRounded` */
     rounded: 'ui-rounded',
-    /** iOS `UIFontDescriptorSystemDesignMonospaced` */
     mono: 'ui-monospace',
   },
   default: {
