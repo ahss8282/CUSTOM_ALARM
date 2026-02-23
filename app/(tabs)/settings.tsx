@@ -8,6 +8,9 @@ import {
   Switch,
   Modal,
   FlatList,
+  Platform,
+  Alert,
+  NativeModules,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
@@ -18,6 +21,13 @@ import { useState } from 'react';
 import { Colors } from '@/constants/theme';
 import { useSettingsStore } from '@/src/store/settings-store';
 import { AppSettings, SUPPORTED_COUNTRIES } from '@/src/types/settings';
+import { openBatteryOptimizationSettings } from '@/src/utils/battery-optimization';
+import {
+  openExactAlarmSettings,
+  openFullScreenIntentSettings,
+  needsExactAlarmPermission,
+  needsFullScreenIntentPermission,
+} from '@/src/utils/alarm-permissions';
 
 type ThemeOption = AppSettings['theme'];
 type LangOption = AppSettings['language'];
@@ -129,6 +139,138 @@ function ToggleRow({
 }
 
 /* ─── 국가 선택 모달 ─── */
+/**
+ * 알람 진단 섹션
+ * - notifee 네이티브 모듈 탑재 여부
+ * - 현재 notifee에 등록된 트리거 알림 목록
+ * - 10초 뒤 테스트 알림 즉시 발동
+ */
+function AlarmDiagnostics({ colors }: { colors: typeof Colors.light }) {
+  const [log, setLog] = useState<string>('');
+  const [loading, setLoading] = useState(false);
+
+  const runDiagnostics = async () => {
+    setLoading(true);
+    const lines: string[] = [];
+
+    // 1) notifee 네이티브 모듈 존재 여부
+    const hasNative = !!NativeModules.NotifeeApiModule;
+    lines.push(`✔ notifee 네이티브: ${hasNative ? 'OK' : '없음(재빌드 필요)'}`);
+
+    if (!hasNative) {
+      setLog(lines.join('\n'));
+      setLoading(false);
+      return;
+    }
+
+    try {
+      const notifee = (await import('@notifee/react-native')).default;
+
+      // 2) 등록된 트리거 알림 목록
+      const triggers = await notifee.getTriggerNotifications();
+      lines.push(`✔ 예약된 알림 수: ${triggers.length}개`);
+      triggers.forEach((t) => {
+        const ts = (t.trigger as any).timestamp;
+        const date = ts ? new Date(ts).toLocaleString('ko-KR') : '?';
+        lines.push(`  - id=${t.notification.id}  발동=${date}`);
+      });
+
+      // 3) 채널 목록
+      const channels = await notifee.getChannels();
+      lines.push(`✔ 알림 채널: ${channels.map((c) => c.id).join(', ') || '없음'}`);
+
+      // 4) 앱 알림 설정 (전체 허용 여부)
+      const settings = await notifee.getNotificationSettings();
+      lines.push(`✔ 알림 허용: ${(settings as any).authorizationStatus}`);
+    } catch (e: any) {
+      lines.push(`✘ notifee 오류: ${e?.message}`);
+    }
+
+    setLog(lines.join('\n'));
+    setLoading(false);
+  };
+
+  const sendTestNotification = async () => {
+    if (!NativeModules.NotifeeApiModule) {
+      Alert.alert('오류', 'notifee 네이티브 모듈이 없습니다. 재빌드가 필요합니다.');
+      return;
+    }
+    try {
+      const notifee = (await import('@notifee/react-native')).default;
+      const { TriggerType, AndroidImportance, AndroidVisibility, AndroidCategory } =
+        await import('@notifee/react-native');
+
+      // 채널이 없으면 생성
+      await notifee.createChannel({
+        id: 'alarm_fullscreen',
+        name: '알람',
+        importance: AndroidImportance.HIGH,
+        visibility: AndroidVisibility.PUBLIC,
+        bypassDnd: true,
+        vibration: true,
+      });
+
+      const timestamp = Date.now() + 10_000; // 10초 뒤
+      await notifee.createTriggerNotification(
+        {
+          id: 'diag_test',
+          title: '🔔 진단 테스트 알람',
+          body: `발동 시각: ${new Date(timestamp).toLocaleTimeString('ko-KR')}`,
+          data: { alarmId: 'diag_test' },
+          android: {
+            channelId: 'alarm_fullscreen',
+            category: AndroidCategory.ALARM,
+            fullScreenAction: { id: 'alarm_fullscreen', launchActivity: 'default' },
+            importance: AndroidImportance.HIGH,
+            visibility: AndroidVisibility.PUBLIC,
+            pressAction: { id: 'default', launchActivity: 'default' },
+            bypassDnd: true,
+          },
+        },
+        {
+          type: TriggerType.TIMESTAMP,
+          timestamp,
+          alarmManager: { allowWhileIdle: true },
+        }
+      );
+
+      Alert.alert('테스트 알람 등록됨', '10초 뒤 알람이 울려야 합니다.\n화면을 끄고 기다려 보세요.');
+      // 등록 후 진단 갱신
+      await runDiagnostics();
+    } catch (e: any) {
+      Alert.alert('등록 실패', e?.message ?? String(e));
+    }
+  };
+
+  return (
+    <>
+      <SectionHeader title="🔧 알람 진단" colors={colors} />
+      <View style={[{ backgroundColor: colors.card, borderColor: colors.border, borderWidth: StyleSheet.hairlineWidth, borderRadius: 12, marginHorizontal: 16, padding: 12, marginBottom: 8 }]}>
+        <TouchableOpacity
+          onPress={runDiagnostics}
+          disabled={loading}
+          style={{ backgroundColor: colors.tint, borderRadius: 8, padding: 10, alignItems: 'center', marginBottom: 8 }}
+        >
+          <Text style={{ color: '#fff', fontWeight: '600' }}>{loading ? '진단 중…' : '진단 실행'}</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={sendTestNotification}
+          style={{ backgroundColor: '#e74c3c', borderRadius: 8, padding: 10, alignItems: 'center', marginBottom: 8 }}
+        >
+          <Text style={{ color: '#fff', fontWeight: '600' }}>10초 뒤 테스트 알람 등록</Text>
+        </TouchableOpacity>
+        {log ? (
+          <Text selectable style={{ color: colors.text, fontFamily: 'monospace', fontSize: 12, lineHeight: 18 }}>
+            {log}
+          </Text>
+        ) : (
+          <Text style={{ color: colors.subText, fontSize: 12 }}>진단 실행 버튼을 누르면 결과가 표시됩니다.</Text>
+        )}
+      </View>
+    </>
+  );
+}
+
 function CountryModal({
   visible,
   onClose,
@@ -271,6 +413,73 @@ export default function SettingsScreen() {
             isLast
           />
         </View>
+
+        {/* 알람 신뢰도 (Android 전용) */}
+        {Platform.OS === 'android' && (
+          <>
+            <SectionHeader title={t('settings.alarmReliability')} colors={colors} />
+            <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              {/* 1) 정확한 알람 권한 — Android 12+ 필수 */}
+              {needsExactAlarmPermission() && (
+                <NavRow
+                  icon="alarm-outline"
+                  label={t('settings.exactAlarm')}
+                  onPress={() => {
+                    Alert.alert(
+                      t('settings.exactAlarm'),
+                      t('settings.exactAlarmDesc'),
+                      [
+                        { text: t('common.cancel'), style: 'cancel' },
+                        { text: t('settings.goToSettings'), onPress: openExactAlarmSettings },
+                      ]
+                    );
+                  }}
+                  colors={colors}
+                />
+              )}
+              {/* 2) 전체화면 인텐트 권한 — Android 14+ 필수 */}
+              {needsFullScreenIntentPermission() && (
+                <NavRow
+                  icon="expand-outline"
+                  label={t('settings.fullScreenIntent')}
+                  onPress={() => {
+                    Alert.alert(
+                      t('settings.fullScreenIntent'),
+                      t('settings.fullScreenIntentDesc'),
+                      [
+                        { text: t('common.cancel'), style: 'cancel' },
+                        { text: t('settings.goToSettings'), onPress: openFullScreenIntentSettings },
+                      ]
+                    );
+                  }}
+                  colors={colors}
+                />
+              )}
+              {/* 3) 배터리 최적화 제외 */}
+              <NavRow
+                icon="battery-charging-outline"
+                label={t('settings.batteryOptimization')}
+                onPress={() => {
+                  Alert.alert(
+                    t('settings.batteryOptimization'),
+                    t('settings.batteryOptimizationDesc'),
+                    [
+                      { text: t('common.cancel'), style: 'cancel' },
+                      { text: t('settings.goToSettings'), onPress: openBatteryOptimizationSettings },
+                    ]
+                  );
+                }}
+                colors={colors}
+                isLast
+              />
+            </View>
+          </>
+        )}
+
+        {/* 알람 진단 (Android 전용) */}
+        {Platform.OS === 'android' && (
+          <AlarmDiagnostics colors={colors} />
+        )}
 
         {/* 정보 */}
         <SectionHeader title={t('settings.info')} colors={colors} />

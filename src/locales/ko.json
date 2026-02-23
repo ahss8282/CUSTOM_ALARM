@@ -41,6 +41,10 @@
     "excludeHolidays": "공휴일 제외",
     "excludeHolidaysDesc": "공휴일에는 알람이 울리지 않습니다",
     "sound": "알람음",
+    "soundAdd": "+ 파일에서 추가",
+    "soundMyFiles": "내 사운드",
+    "soundDelete": "삭제",
+    "soundPreview": "미리듣기",
     "volume": "볼륨",
     "vibration": "진동",
     "snooze": "다시 울림",
@@ -123,8 +127,19 @@
     "notification": "알림",
     "criticalAlerts": "중요 알림",
     "criticalAlertsDesc": "방해 금지 모드에서도 알람이 울립니다",
+    "alarmReliability": "알람 신뢰도",
+    "batteryOptimization": "배터리 최적화 제외",
+    "batteryOptimizationDesc": "일부 제조사(삼성, 샤오미 등)는 백그라운드 앱을 강제 종료해 알람이 울리지 않을 수 있습니다. 배터리 최적화 제외 설정을 하면 이를 방지할 수 있습니다.",
+    "exactAlarm": "정확한 알람 권한",
+    "exactAlarmDesc": "Android 12 이상에서 정확한 시각에 알람을 울리려면 '알람 및 리마인더' 허용이 필요합니다.\n설정 → 앱 → Custom Alarm → 알람 및 리마인더 → 허용",
+    "fullScreenIntent": "전체화면 알람 표시 권한",
+    "fullScreenIntentDesc": "Android 14 이상에서 화면 꺼짐 상태에서도 알람 화면을 자동으로 띄우려면 '전체화면 인텐트' 허용이 필요합니다.\n설정 → 앱 → Custom Alarm → 전체화면 인텐트 허용",
+    "goToSettings": "설정으로 이동",
     "info": "정보",
     "version": "버전",
     "licenses": "오픈소스 라이선스"
+  },
+  "common": {
+    "cancel": "취소"
   }
 }

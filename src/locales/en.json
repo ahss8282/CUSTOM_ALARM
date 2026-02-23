@@ -41,6 +41,10 @@
     "excludeHolidays": "Exclude Holidays",
     "excludeHolidaysDesc": "Alarm won't ring on holidays",
     "sound": "Sound",
+    "soundAdd": "+ Add from file",
+    "soundMyFiles": "My Sounds",
+    "soundDelete": "Delete",
+    "soundPreview": "Preview",
     "volume": "Volume",
     "vibration": "Vibration",
     "snooze": "Snooze",
@@ -123,8 +127,19 @@
     "notification": "Notification",
     "criticalAlerts": "Critical Alerts",
     "criticalAlertsDesc": "Play sound even in focus mode",
+    "alarmReliability": "Alarm Reliability",
+    "batteryOptimization": "Battery Optimization Exempt",
+    "batteryOptimizationDesc": "Some manufacturers (Samsung, Xiaomi, etc.) may kill background apps and prevent alarms from firing. Exempting battery optimization helps prevent this.",
+    "exactAlarm": "Exact Alarm Permission",
+    "exactAlarmDesc": "On Android 12+, the 'Alarms & Reminders' permission is required to ring alarms at exact times.\nSettings → Apps → Custom Alarm → Alarms & Reminders → Allow",
+    "fullScreenIntent": "Full-Screen Alarm Display Permission",
+    "fullScreenIntentDesc": "On Android 14+, 'Full-screen intent' permission is required to auto-display the alarm screen when the screen is off.\nSettings → Apps → Custom Alarm → Allow full-screen intent",
+    "goToSettings": "Go to Settings",
     "info": "Info",
     "version": "Version",
     "licenses": "Open Source Licenses"
+  },
+  "common": {
+    "cancel": "Cancel"
   }
 }

@@ -31,6 +31,12 @@ export interface Alarm {
   // 스누즈
   snooze: SnoozeSettings;
 
+  // 배경 (Phase 3)
+  background?: {
+    type: 'color' | 'image';
+    value: string;  // hex color 또는 image URI
+  };
+
   createdAt: string;
   updatedAt: string;
 }

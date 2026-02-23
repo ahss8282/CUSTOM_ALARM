@@ -22,6 +22,8 @@ import { useAudioPlayer } from 'expo-audio';
 import { Colors } from '@/constants/theme';
 import { useAlarmStore } from '@/src/store/alarm-store';
 import { useSettingsStore } from '@/src/store/settings-store';
+import { useSoundStore, getCustomSoundId, parseCustomSoundId, isCustomSoundId } from '@/src/store/sound-store';
+import { pickSoundFile } from '@/src/utils/pick-sound';
 import { DEFAULT_ALARM, DEFAULT_SNOOZE } from '@/src/types/alarm';
 import { getHolidays } from '@/src/utils/holiday';
 
@@ -83,7 +85,7 @@ function VolumeSlider({
       {...panResponder.panHandlers}
     >
       <View style={{ height: 4, borderRadius: 2, backgroundColor: colors.border }}>
-        <View style={{ width: '' + value + '%', height: '100%', backgroundColor: colors.primary, borderRadius: 2 }} />
+        <View style={{ width: `${value}%`, height: '100%', backgroundColor: colors.primary, borderRadius: 2 }} />
       </View>
       <View
         style={{
@@ -106,7 +108,15 @@ function VolumeSlider({
 }
 
 
-/* ─── 드럼롤 피커 ─── */
+/* ─── 드럼롤 피커 (순환 스크롤) ─── */
+/*
+ * 원리: 실제 값 배열을 3번 반복(looped)해서 중간 섹션을 사용합니다.
+ *   예) HOURS = [0..23]  →  looped = [0..23, 0..23, 0..23] (72개)
+ *   초기 위치: 중간 섹션 시작 = values.length * ITEM_HEIGHT
+ *
+ * 스크롤 끝에 가면 중간 섹션으로 순간 점프(animated: false)해서
+ * 무한 순환처럼 보이게 합니다.
+ */
 function DrumPicker({
   values,
   selected,
@@ -121,11 +131,19 @@ function DrumPicker({
   label: string;
 }) {
   const scrollRef = useRef<ScrollView>(null);
-  const isScrolling = useRef(false);
+  const count = values.length;
+  // 3배 반복 배열 (인덱스 count ~ 2*count-1 이 실제 값 섹션)
+  const looped = [...values, ...values, ...values];
 
-  const snapToValue = (val: number) => {
+  /**
+   * 선택된 값을 중간 섹션의 위치로 스크롤합니다.
+   * animated: false → 순간 이동 (순환 점프 시 깜빡임 없음)
+   * animated: true  → 부드럽게 이동 (터치 선택 시)
+   */
+  const scrollToMiddle = (val: number, animated: boolean) => {
     const idx = values.indexOf(val);
-    scrollRef.current?.scrollTo({ y: idx * ITEM_HEIGHT, animated: true });
+    const middleIdx = count + idx; // 중간 섹션 기준 인덱스
+    scrollRef.current?.scrollTo({ y: middleIdx * ITEM_HEIGHT, animated });
   };
 
   return (
@@ -138,25 +156,27 @@ function DrumPicker({
         decelerationRate="fast"
         nestedScrollEnabled
         scrollEventThrottle={16}
-        onScrollBeginDrag={() => { isScrolling.current = true; }}
         onMomentumScrollEnd={(e) => {
-          isScrolling.current = false;
-          const index = Math.round(e.nativeEvent.contentOffset.y / ITEM_HEIGHT);
-          const clamped = Math.max(0, Math.min(values.length - 1, index));
-          onSelect(values[clamped]);
+          const rawIndex = Math.round(e.nativeEvent.contentOffset.y / ITEM_HEIGHT);
+          // looped 배열에서의 실제 값 (모듈로 연산으로 순환)
+          const actualVal = values[((rawIndex % count) + count) % count];
+          onSelect(actualVal);
+          // 중간 섹션으로 순간 점프 (순환 유지)
+          const middleIdx = count + values.indexOf(actualVal);
+          scrollRef.current?.scrollTo({ y: middleIdx * ITEM_HEIGHT, animated: false });
         }}
         onLayout={() => {
-          const idx = values.indexOf(selected);
-          scrollRef.current?.scrollTo({ y: idx * ITEM_HEIGHT, animated: false });
+          // 최초 렌더 시 현재 선택값의 중간 섹션 위치로 이동
+          scrollToMiddle(selected, false);
         }}
         contentContainerStyle={{ paddingVertical: ITEM_HEIGHT * 2 }}
         style={{ height: ITEM_HEIGHT * 5 }}
       >
-        {values.map((val) => (
+        {looped.map((val, i) => (
           <TouchableOpacity
-            key={val}
+            key={i}
             style={[pickerStyles.item, { height: ITEM_HEIGHT }]}
-            onPress={() => { onSelect(val); snapToValue(val); }}
+            onPress={() => { onSelect(val); scrollToMiddle(val, true); }}
             activeOpacity={0.6}
           >
             <Text
@@ -338,6 +358,29 @@ export default function AlarmEditScreen() {
   const [background, setBackground] = useState(base.background ?? { type: 'color' as const, value: '#d1d0ec' });
 
   const previewPlayer = useAudioPlayer(require('@/assets/sounds/alarm_default.mp3'));
+
+  /* ── 커스텀 사운드 스토어 ── */
+  const { customSounds, loadSounds, addSound, deleteSound } = useSoundStore();
+  useEffect(() => { loadSounds(); }, []);
+
+  /* ── 커스텀 사운드 파일 추가 ── */
+  const handleAddCustomSound = async () => {
+    try {
+      const picked = await pickSoundFile();
+      if (!picked) return;
+      const newSound = await addSound(picked.name, picked.uri);
+      setSoundId(getCustomSoundId(newSound.id));
+    } catch {
+      // 파일 선택 실패 무시
+    }
+  };
+
+  /* ── 커스텀 사운드 삭제 ── */
+  const handleDeleteCustomSound = (id: string) => {
+    // 현재 선택 중인 사운드를 삭제하면 기본음으로 초기화
+    if (soundId === getCustomSoundId(id)) setSoundId('default');
+    deleteSound(id);
+  };
 
   const toggleWeekday = (day: number) =>
     setWeekdays((prev) =>
@@ -567,6 +610,7 @@ export default function AlarmEditScreen() {
         <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
           <Text style={[styles.cardLabel, { color: colors.subText }]}>{t('alarmEdit.sound')}</Text>
           <View style={{ gap: 6 }}>
+            {/* 내장 사운드 목록 */}
             {SOUND_OPTIONS.map((s) => (
               <TouchableOpacity
                 key={s}
@@ -585,6 +629,54 @@ export default function AlarmEditScreen() {
                 <Ionicons name="play-circle-outline" size={20} color={colors.subText} />
               </TouchableOpacity>
             ))}
+
+            {/* 커스텀 사운드 목록 */}
+            {customSounds.length > 0 && (
+              <>
+                <View style={[styles.soundDivider, { borderColor: colors.border }]}>
+                  <Text style={[styles.soundDividerText, { color: colors.subText }]}>
+                    {t('alarmEdit.soundMyFiles')}
+                  </Text>
+                </View>
+                {customSounds.map((cs) => {
+                  const csId = getCustomSoundId(cs.id);
+                  return (
+                    <View key={cs.id} style={[styles.soundRow, { borderColor: colors.border }]}>
+                      <TouchableOpacity
+                        style={{ flexDirection: 'row', alignItems: 'center', flex: 1, gap: 10 }}
+                        onPress={() => setSoundId(csId)}
+                      >
+                        <View style={[styles.radioOuter, { borderColor: colors.primary }]}>
+                          {soundId === csId && <View style={[styles.radioInner, { backgroundColor: colors.primary }]} />}
+                        </View>
+                        <Text style={[styles.soundName, { color: colors.text }]} numberOfLines={1}>
+                          {cs.name}
+                        </Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        onPress={() => handleDeleteCustomSound(cs.id)}
+                        style={{ padding: 4 }}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      >
+                        <Ionicons name="trash-outline" size={18} color="#ef4444" />
+                      </TouchableOpacity>
+                    </View>
+                  );
+                })}
+              </>
+            )}
+
+            {/* 파일에서 추가 버튼 */}
+            <TouchableOpacity
+              style={[styles.soundAddBtn, { borderColor: colors.primary }]}
+              onPress={handleAddCustomSound}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="add-circle-outline" size={18} color={colors.primary} />
+              <Text style={[styles.soundAddText, { color: colors.primary }]}>
+                {t('alarmEdit.soundAdd')}
+              </Text>
+            </TouchableOpacity>
           </View>
         </View>
 
@@ -793,6 +885,25 @@ const styles = StyleSheet.create({
   radioOuter: { width: 20, height: 20, borderRadius: 10, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
   radioInner: { width: 10, height: 10, borderRadius: 5 },
   soundName: { flex: 1, fontSize: 15 },
+  soundDivider: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    paddingTop: 10,
+    marginTop: 4,
+  },
+  soundDividerText: { fontSize: 11, fontWeight: '700', letterSpacing: 0.8, textTransform: 'uppercase', marginBottom: 6 },
+  soundAddBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    paddingHorizontal: 4,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderRadius: 10,
+    justifyContent: 'center',
+    marginTop: 4,
+  },
+  soundAddText: { fontSize: 14, fontWeight: '600' },
   chip: {
     paddingHorizontal: 14,
     paddingVertical: 8,
