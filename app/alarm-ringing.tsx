@@ -8,6 +8,7 @@ import {
   Platform,
   StatusBar,
   Dimensions,
+  BackHandler,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useRef, useState, useCallback } from 'react';
@@ -18,8 +19,13 @@ import { createAudioPlayer, setAudioModeAsync } from 'expo-audio';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { Asset } from 'expo-asset';
+
 import { useAlarmStore } from '@/src/store/alarm-store';
+import { useSoundStore, isCustomSoundId, parseCustomSoundId } from '@/src/store/sound-store';
 import { scheduleSnoozeNotification } from '@/src/utils/notification';
+import { playAlarmNative, stopAlarmNative, isNativeAlarmAudioAvailable, moveAppToBackground } from '@/src/utils/alarm-audio-native';
+import { useKeepAwake } from 'expo-keep-awake';
 
 const { width: SCREEN_W } = Dimensions.get('window');
 
@@ -44,6 +50,9 @@ export default function AlarmRingingScreen() {
   const insets = useSafeAreaInsets();
 
   const alarm = useAlarmStore((s) => s.alarms.find((a) => a.id === alarmId));
+  const isStoreLoaded = useAlarmStore((s) => s.isLoaded);
+  const { customSounds, loadSounds } = useSoundStore();
+  useEffect(() => { loadSounds(); }, []);
 
   /* ── 사운드 (createAudioPlayer: 수동 lifecycle 관리, 이중 해제 방지) ── */
   const playerRef = useRef<ReturnType<typeof createAudioPlayer> | null>(null);
@@ -55,15 +64,63 @@ export default function AlarmRingingScreen() {
     return () => clearInterval(id);
   }, []);
 
+  /* ── 화면 켜기 (expo-keep-awake): 알람 울림 중 화면이 꺼지지 않도록 ── */
+  useKeepAwake();
+
+  /* ── soundId에 따른 오디오 소스 결정 ── */
+  const getAudioSource = () => {
+    const soundId = alarm?.soundId ?? 'default';
+    if (isCustomSoundId(soundId)) {
+      const id = parseCustomSoundId(soundId);
+      const cs = customSounds.find((s) => s.id === id);
+      if (cs) return { uri: cs.uri };
+    }
+    // 내장 사운드 맵
+    const builtinMap: Record<string, any> = {
+      default: require('@/assets/sounds/alarm_default.mp3'),
+      bell:    require('@/assets/sounds/alarm_bell.mp3'),
+      digital: require('@/assets/sounds/alarm_digital.mp3'),
+      gentle:  require('@/assets/sounds/alarm_soft.mp3'),
+    };
+    return builtinMap[soundId] ?? builtinMap['default'];
+  };
+
   /* ── 사운드 재생 시작 ── */
   useEffect(() => {
     let mounted = true;
+    const volume = alarm ? alarm.volume / 100 : 1.0;
+    const source = getAudioSource();
+
     const start = async () => {
       try {
-        await setAudioModeAsync({ playsInSilentMode: true });
-        const p = createAudioPlayer(require('@/assets/sounds/alarm_default.mp3'));
+        // Android: STREAM_ALARM 네이티브 모듈로 무음/진동 모드 우회
+        if (isNativeAlarmAudioAvailable()) {
+          let uri: string;
+          if (typeof source === 'object' && 'uri' in source) {
+            // 커스텀 사운드: 이미 file:// URI
+            uri = source.uri;
+          } else {
+            // 내장 사운드(require): expo-asset으로 로컬 파일 URI 획득
+            const asset = Asset.fromModule(source as number);
+            await asset.downloadAsync();
+            uri = asset.localUri ?? '';
+          }
+          if (uri) {
+            const ok = await playAlarmNative(uri, volume);
+            if (ok) return; // 네이티브 성공 시 expo-audio 스킵
+          }
+        }
+
+        // iOS 또는 네이티브 실패 시: expo-audio 사용
+        // playsInSilentMode: true → iOS 무음 스위치 우회
+        await setAudioModeAsync({
+          playsInSilentMode: true,
+          interruptionMode: 'doNotMix',
+          shouldPlayInBackground: true,
+        });
+        const p = createAudioPlayer(source);
         if (!mounted) { p.remove(); return; }
-        p.volume = alarm ? alarm.volume / 100 : 1.0;
+        p.volume = volume;
         p.loop = true;
         p.play();
         playerRef.current = p;
@@ -74,11 +131,13 @@ export default function AlarmRingingScreen() {
     start();
     return () => {
       mounted = false;
+      // Android 네이티브 오디오 정지
+      stopAlarmNative();
       playerRef.current?.remove();
       playerRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [customSounds]);
 
   /* ── 진동 반복 (vibration ON인 경우) ── */
   useEffect(() => {
@@ -92,9 +151,26 @@ export default function AlarmRingingScreen() {
 
   /* ── 종료 공통 처리 ── */
   const stopAndClose = useCallback(async () => {
+    stopAlarmNative();
     playerRef.current?.pause();
+    playerRef.current = null;
     if (alarmId) await AsyncStorage.removeItem(snoozeCountKey(alarmId));
-    if (router.canGoBack()) { router.back(); } else { router.replace('/(tabs)'); }
+    // pending_alarm_id 및 notifee 표시 알림 취소:
+    // getDisplayedNotifications()가 앱 재실행 시 같은 알림을 다시 찾아
+    // 알람 화면이 반복 표시되는 것을 방지합니다.
+    if (alarmId) await AsyncStorage.removeItem('pending_alarm_id');
+    if (Platform.OS === 'android') {
+      try {
+        const notifee = require('@notifee/react-native').default;
+        // cancelDisplayedNotifications: 표시된 알림만 제거합니다.
+        // cancelAllNotifications는 예약된 미래 트리거 알림까지 삭제하므로 사용 금지.
+        await notifee.cancelDisplayedNotifications();
+      } catch {}
+    }
+    router.replace('/(tabs)');
+    if (Platform.OS === 'android') {
+      await moveAppToBackground();
+    }
   }, [alarmId, router]);
 
   /* ── 스누즈 ── */
@@ -109,13 +185,31 @@ export default function AlarmRingingScreen() {
   }, [alarm, alarmId]);
 
   const handleSnooze = useCallback(async () => {
-    if (!alarm || !alarmId) return;
+    if (!alarm || !alarmId || !isStoreLoaded) return;
     const key = snoozeCountKey(alarmId);
     const used = parseInt((await AsyncStorage.getItem(key)) ?? '0');
     await AsyncStorage.setItem(key, String(used + 1));
     await scheduleSnoozeNotification(alarm, alarm.snooze.intervalMinutes);
+    stopAlarmNative();
     playerRef.current?.pause();
-    if (router.canGoBack()) { router.back(); } else { router.replace('/(tabs)'); }
+    playerRef.current = null;
+    // 현재 알람 알림만 취소 (스누즈 알림은 유지해야 하므로 cancelAllNotifications 불가)
+    // pending_alarm_id도 제거해 앱 재실행 시 알람 화면이 다시 뜨지 않도록 합니다.
+    if (alarmId) await AsyncStorage.removeItem('pending_alarm_id');
+    if (Platform.OS === 'android') {
+      try {
+        const notifee = require('@notifee/react-native').default;
+        const displayed = await notifee.getDisplayedNotifications();
+        const toCancel = displayed
+          .filter((n: any) => n.notification.data?.alarmId === alarmId)
+          .map((n: any) => n.notification.id as string);
+        await Promise.all(toCancel.map((id: string) => notifee.cancelDisplayedNotification(id)));
+      } catch {}
+    }
+    router.replace('/(tabs)');
+    if (Platform.OS === 'android') {
+      await moveAppToBackground();
+    }
   }, [alarm, alarmId, router]);
 
   /* ── 수학 문제 모달 ── */
@@ -125,6 +219,8 @@ export default function AlarmRingingScreen() {
   const [mathError, setMathError] = useState(false);
 
   const handleStopPress = useCallback(() => {
+    // alarm이 아직 로드되지 않았으면 버튼 무시 (강화 조건을 undefined로 통과하는 것 방지)
+    if (!isStoreLoaded) return;
     if (alarm?.snooze.enforced) {
       setMathProblem(generateMath());
       setMathInput('');
@@ -133,7 +229,19 @@ export default function AlarmRingingScreen() {
     } else {
       stopAndClose();
     }
-  }, [alarm, stopAndClose]);
+  }, [alarm, isStoreLoaded, stopAndClose]);
+
+  /* ── Android 하드웨어 뒤로가기 버튼 차단 ── */
+  // gestureEnabled:false는 iOS 스와이프만 막습니다.
+  // Android 뒤로가기 버튼을 막지 않으면 알람 편집 화면 등 이전 화면으로 돌아갑니다.
+  // 뒤로가기를 누르면 알람 종료(handleStopPress)로 처리합니다.
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      handleStopPress();
+      return true; // true 반환 = 기본 뒤로가기 동작 차단
+    });
+    return () => sub.remove();
+  }, [handleStopPress]);
 
   const handleMathConfirm = useCallback(() => {
     if (parseInt(mathInput) === mathProblem.answer) {

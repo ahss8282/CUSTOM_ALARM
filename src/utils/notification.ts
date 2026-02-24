@@ -2,10 +2,17 @@ import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 import { Alarm } from '../types/alarm';
+import {
+  canUseNotifee,
+  scheduleAlarmWithNotifee,
+  cancelAlarmWithNotifee,
+  scheduleSnoozeWithNotifee,
+  setupNotifeeChannel,
+} from './notification-notifee';
 
 const isExpoGo = Constants.executionEnvironment === 'storeClient';
 
-// Android: 알람 전용 채널 (importance MAX = 잠금화면 전체화면 + 무음 우회)
+// Android: expo-notifications 폴백 채널 (notifee 미사용 환경용)
 if (Platform.OS === 'android') {
   Notifications.setNotificationChannelAsync('alarm', {
     name: '알람',
@@ -16,6 +23,8 @@ if (Platform.OS === 'android') {
     lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
     bypassDnd: true,
   });
+  // notifee 채널도 미리 생성
+  setupNotifeeChannel();
 }
 
 Notifications.setNotificationHandler({
@@ -39,24 +48,40 @@ export const requestNotificationPermission = async (): Promise<boolean> => {
 };
 
 /**
- * 알람 알림을 스케줄에 등록합니다.
- * - weekly 모드: weekdays 기반 반복 알림
- * - calendar 모드: 개별 날짜에 단발 알림
+ * 알람을 스케줄에 등록합니다.
+ *
+ * Android (Development Build):
+ *   → notifee.createTriggerNotification 사용
+ *   → fullScreenAction으로 화면 꺼짐 상태에서도 자동 전체화면 팝업
+ *
+ * iOS / Expo Go:
+ *   → expo-notifications 사용
  */
 export const scheduleAlarmNotification = async (alarm: Alarm): Promise<void> => {
-  if (isExpoGo) return;
+  if (isExpoGo && Platform.OS === 'android') return;
 
+  // Android: notifee (네이티브 모듈이 실제로 탑재된 경우에만)
+  // canUseNotifee()가 false면 notifee 네이티브 모듈이 없는 것이므로 expo-notifications로 폴백
+  if (canUseNotifee()) {
+    try {
+      await scheduleAlarmWithNotifee(alarm);
+      return; // notifee 성공 시에만 return
+    } catch (e) {
+      console.warn('[notification] notifee 스케줄 실패, expo-notifications로 폴백:', e);
+      // 아래 expo-notifications 경로로 계속 진행
+    }
+  }
+
+  // iOS / notifee 미탑재 Android / fallback: expo-notifications
   const content: Notifications.NotificationContentInput = {
     title: alarm.name || '알람',
     body: `${String(alarm.hour).padStart(2, '0')}:${String(alarm.minute).padStart(2, '0')}`,
     sound: true,
     data: { alarmId: alarm.id },
-    ...(Platform.OS === 'android' && { channelId: 'alarm' }),
   };
 
   if (alarm.scheduleType === 'weekly') {
     if (alarm.weekdays.length === 0) {
-      // 한 번만
       const now = new Date();
       const trigger = new Date();
       trigger.setHours(alarm.hour, alarm.minute, 0, 0);
@@ -67,7 +92,6 @@ export const scheduleAlarmNotification = async (alarm: Alarm): Promise<void> => 
         trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: trigger },
       });
     } else {
-      // 요일 반복 (expo-notifications weekday: 1=일, 2=월, ..., 7=토)
       for (const weekday of alarm.weekdays) {
         await Notifications.scheduleNotificationAsync({
           identifier: `${alarm.id}_w${weekday}`,
@@ -82,10 +106,11 @@ export const scheduleAlarmNotification = async (alarm: Alarm): Promise<void> => 
       }
     }
   } else {
-    // calendar 모드: 각 날짜에 단발 알림 등록
     const now = new Date();
     for (const dateStr of alarm.calendarDates) {
-      const trigger = new Date(`${dateStr}T${String(alarm.hour).padStart(2, '0')}:${String(alarm.minute).padStart(2, '0')}:00`);
+      const trigger = new Date(
+        `${dateStr}T${String(alarm.hour).padStart(2, '0')}:${String(alarm.minute).padStart(2, '0')}:00`
+      );
       if (trigger > now) {
         await Notifications.scheduleNotificationAsync({
           identifier: `${alarm.id}_d${dateStr}`,
@@ -98,7 +123,20 @@ export const scheduleAlarmNotification = async (alarm: Alarm): Promise<void> => 
 };
 
 export const cancelAlarmNotification = async (alarmId: string): Promise<void> => {
-  if (isExpoGo) return;
+  if (isExpoGo && Platform.OS === 'android') return;
+
+  // Android: notifee 취소 시도 (탑재된 경우)
+  if (canUseNotifee()) {
+    try {
+      await cancelAlarmWithNotifee(alarmId);
+    } catch (e) {
+      console.warn('[notification] notifee 취소 실패:', e);
+    }
+    // notifee 성공·실패 관계없이 expo-notifications 예약도 함께 취소
+    // (notifee 도입 이전에 expo-notifications로 등록된 알람이 남아있을 수 있음)
+  }
+
+  // iOS / notifee 미탑재 Android / expo-notifications 잔여분 정리
   const scheduled = await Notifications.getAllScheduledNotificationsAsync();
   const toCancel = scheduled.filter((n) => n.identifier.startsWith(`${alarmId}_`));
   await Promise.all(
@@ -106,12 +144,24 @@ export const cancelAlarmNotification = async (alarmId: string): Promise<void> =>
   );
 };
 
-/** 스누즈: N분 뒤 단발 알림 등록 */
+/** 스누즈: N분 뒤 단발 알림 */
 export const scheduleSnoozeNotification = async (
   alarm: Alarm,
   intervalMinutes: number
 ): Promise<void> => {
-  if (isExpoGo) return;
+  if (isExpoGo && Platform.OS === 'android') return;
+
+  // Android: notifee
+  if (canUseNotifee()) {
+    try {
+      await scheduleSnoozeWithNotifee(alarm, intervalMinutes);
+      return;
+    } catch (e) {
+      console.warn('[notification] notifee 스누즈 실패, expo-notifications로 폴백:', e);
+    }
+  }
+
+  // iOS / notifee 미탑재 Android / fallback
   const trigger = new Date(Date.now() + intervalMinutes * 60 * 1000);
   await Notifications.scheduleNotificationAsync({
     identifier: `${alarm.id}_snooze`,
@@ -119,7 +169,7 @@ export const scheduleSnoozeNotification = async (
       title: `⏰ ${alarm.name || '알람'} (다시 울림)`,
       body: `${intervalMinutes}분 뒤 알람`,
       sound: true,
-      data: { alarmId: alarm.id, snooze: true },
+      data: { alarmId: alarm.id, snooze: 'true' },
     },
     trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: trigger },
   });
