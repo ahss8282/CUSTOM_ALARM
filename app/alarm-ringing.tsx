@@ -8,6 +8,7 @@ import {
   Platform,
   StatusBar,
   Dimensions,
+  BackHandler,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useRef, useState, useCallback } from 'react';
@@ -24,7 +25,7 @@ import { useAlarmStore } from '@/src/store/alarm-store';
 import { useSoundStore, isCustomSoundId, parseCustomSoundId } from '@/src/store/sound-store';
 import { scheduleSnoozeNotification } from '@/src/utils/notification';
 import { playAlarmNative, stopAlarmNative, isNativeAlarmAudioAvailable, moveAppToBackground } from '@/src/utils/alarm-audio-native';
-import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
+import { useKeepAwake } from 'expo-keep-awake';
 
 const { width: SCREEN_W } = Dimensions.get('window');
 
@@ -63,11 +64,8 @@ export default function AlarmRingingScreen() {
     return () => clearInterval(id);
   }, []);
 
-  /* ── 화면 켜기 (expo-keep-awake): 잠금화면에서 화면이 꺼지지 않도록 ── */
-  useEffect(() => {
-    activateKeepAwakeAsync();
-    return () => { deactivateKeepAwake(); };
-  }, []);
+  /* ── 화면 켜기 (expo-keep-awake): 알람 울림 중 화면이 꺼지지 않도록 ── */
+  useKeepAwake();
 
   /* ── soundId에 따른 오디오 소스 결정 ── */
   const getAudioSource = () => {
@@ -77,9 +75,14 @@ export default function AlarmRingingScreen() {
       const cs = customSounds.find((s) => s.id === id);
       if (cs) return { uri: cs.uri };
     }
-    // 내장 사운드 맵 — 현재 프로젝트에는 alarm_default.mp3만 존재
-    // bell/digital/gentle 파일이 추가되면 아래 맵을 확장하세요
-    return require('@/assets/sounds/alarm_default.mp3');
+    // 내장 사운드 맵
+    const builtinMap: Record<string, any> = {
+      default: require('@/assets/sounds/alarm_default.mp3'),
+      bell:    require('@/assets/sounds/alarm_bell.mp3'),
+      digital: require('@/assets/sounds/alarm_digital.mp3'),
+      gentle:  require('@/assets/sounds/alarm_soft.mp3'),
+    };
+    return builtinMap[soundId] ?? builtinMap['default'];
   };
 
   /* ── 사운드 재생 시작 ── */
@@ -152,14 +155,21 @@ export default function AlarmRingingScreen() {
     playerRef.current?.pause();
     playerRef.current = null;
     if (alarmId) await AsyncStorage.removeItem(snoozeCountKey(alarmId));
-    // 알람을 끈 뒤 앱을 백그라운드로 이동합니다.
-    // moveTaskToBack(true): 홈 버튼과 동일한 효과 → AlarmManager가 다음 알람에 앱을 재시작 가능
-    // BackHandler.exitApp()은 System.exit(0)을 호출하여 삼성이 강제종료로 인식,
-    // 이후 AlarmManager의 앱 재시작을 막는 문제가 있습니다.
+    // pending_alarm_id 및 notifee 표시 알림 취소:
+    // getDisplayedNotifications()가 앱 재실행 시 같은 알림을 다시 찾아
+    // 알람 화면이 반복 표시되는 것을 방지합니다.
+    if (alarmId) await AsyncStorage.removeItem('pending_alarm_id');
+    if (Platform.OS === 'android') {
+      try {
+        const notifee = require('@notifee/react-native').default;
+        // cancelDisplayedNotifications: 표시된 알림만 제거합니다.
+        // cancelAllNotifications는 예약된 미래 트리거 알림까지 삭제하므로 사용 금지.
+        await notifee.cancelDisplayedNotifications();
+      } catch {}
+    }
+    router.replace('/(tabs)');
     if (Platform.OS === 'android') {
       await moveAppToBackground();
-    } else {
-      if (router.canGoBack()) { router.back(); } else { router.replace('/(tabs)'); }
     }
   }, [alarmId, router]);
 
@@ -183,11 +193,22 @@ export default function AlarmRingingScreen() {
     stopAlarmNative();
     playerRef.current?.pause();
     playerRef.current = null;
-    // 스누즈 등록 후 앱 백그라운드 이동 — 다음 스누즈 알람은 notifee AlarmManager가 처리
+    // 현재 알람 알림만 취소 (스누즈 알림은 유지해야 하므로 cancelAllNotifications 불가)
+    // pending_alarm_id도 제거해 앱 재실행 시 알람 화면이 다시 뜨지 않도록 합니다.
+    if (alarmId) await AsyncStorage.removeItem('pending_alarm_id');
+    if (Platform.OS === 'android') {
+      try {
+        const notifee = require('@notifee/react-native').default;
+        const displayed = await notifee.getDisplayedNotifications();
+        const toCancel = displayed
+          .filter((n: any) => n.notification.data?.alarmId === alarmId)
+          .map((n: any) => n.notification.id as string);
+        await Promise.all(toCancel.map((id: string) => notifee.cancelDisplayedNotification(id)));
+      } catch {}
+    }
+    router.replace('/(tabs)');
     if (Platform.OS === 'android') {
       await moveAppToBackground();
-    } else {
-      if (router.canGoBack()) { router.back(); } else { router.replace('/(tabs)'); }
     }
   }, [alarm, alarmId, router]);
 
@@ -209,6 +230,18 @@ export default function AlarmRingingScreen() {
       stopAndClose();
     }
   }, [alarm, isStoreLoaded, stopAndClose]);
+
+  /* ── Android 하드웨어 뒤로가기 버튼 차단 ── */
+  // gestureEnabled:false는 iOS 스와이프만 막습니다.
+  // Android 뒤로가기 버튼을 막지 않으면 알람 편집 화면 등 이전 화면으로 돌아갑니다.
+  // 뒤로가기를 누르면 알람 종료(handleStopPress)로 처리합니다.
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      handleStopPress();
+      return true; // true 반환 = 기본 뒤로가기 동작 차단
+    });
+    return () => sub.remove();
+  }, [handleStopPress]);
 
   const handleMathConfirm = useCallback(() => {
     if (parseInt(mathInput) === mathProblem.answer) {

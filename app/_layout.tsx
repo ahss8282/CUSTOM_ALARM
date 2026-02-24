@@ -101,16 +101,47 @@ export default function RootLayout() {
     const navigateToRinging = (alarmId: string) => {
       // diag_test ID는 진단용 테스트 알람이므로 실제 알람 화면으로 이동하지 않음
       if (alarmId === 'diag_test') return;
-      setTimeout(() => router.push(`/alarm-ringing?alarmId=${alarmId}`), 300);
+      // push 대신 replace: alarm-ringing이 스택에 중복 쌓이는 것을 방지합니다.
+      // push를 쓰면 알람이 여러 번 발동될 때마다 스택에 쌓여
+      // 뒤로가기를 알람 횟수만큼 눌러야 탈출할 수 있습니다.
+      setTimeout(() => router.replace(`/alarm-ringing?alarmId=${alarmId}`), 300);
     };
 
-    // ── AppState 리스너: 백그라운드 → 포그라운드 전환 시 pending 알람 확인 ──
-    // alarm-task.ts의 onBackgroundEvent(DELIVERED)가 AsyncStorage에 저장한
-    // pending_alarm_id를 여기서 읽어 alarm-ringing 화면으로 이동합니다.
+    // ── AppState 리스너: 백그라운드 → 포그라운드 전환 시 알람 확인 ──────────
+    //
+    // [이전 방식의 문제]
+    // onBackgroundEvent(Headless JS)가 AsyncStorage에 pending_alarm_id를 저장하고,
+    // UI 스레드의 AppState 리스너가 읽는 방식은 두 프로세스 간 race condition이 있습니다.
+    //
+    // [새로운 방식]
+    // 1순위: getDisplayedNotifications() — 알림은 fullScreenAction보다 먼저 표시됩니다.
+    //        앱이 포그라운드가 될 때 알림이 이미 표시 중이므로 race condition이 없습니다.
+    // 2순위: pending_alarm_id (AsyncStorage) — 사용자가 알림을 직접 닫은 후 앱을 수동으로
+    //        열었을 때 fallback으로 사용합니다.
     const handleAppStateChange = async (nextState: AppStateStatus) => {
       const prev = appStateRef.current;
       appStateRef.current = nextState;
       if (prev !== 'active' && nextState === 'active') {
+        // 1순위: 현재 표시된 알람 알림 직접 조회
+        if (canUseNotifee()) {
+          try {
+            const { default: notifee } = await import('@notifee/react-native');
+            const displayed = await notifee.getDisplayedNotifications();
+            const alarmNotif = displayed.find(
+              (n) => {
+                const id = n.notification.data?.alarmId as string | undefined;
+                return id && id !== 'diag_test';
+              }
+            );
+            if (alarmNotif) {
+              const alarmId = alarmNotif.notification.data!.alarmId as string;
+              navigateToRinging(alarmId);
+              return;
+            }
+          } catch {}
+        }
+
+        // 2순위: AsyncStorage fallback (알림을 직접 닫은 뒤 앱을 수동으로 연 경우)
         try {
           const pendingId = await AsyncStorage.getItem('pending_alarm_id');
           if (pendingId) {

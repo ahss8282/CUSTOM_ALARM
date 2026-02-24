@@ -84,14 +84,8 @@ export const useSoundStore = create<SoundStore>((set, get) => ({
     const soundsDir = getSoundsDir();
     const destFile = new File(soundsDir, fileName);
     const sourceFile = new File(sourceUri);
-    // 소스 파일을 sounds 폴더로 복사
-    sourceFile.copy(soundsDir);
-    // 복사된 파일의 URI는 sounds 폴더 + 원본 파일명으로 생성됨
-    // 명시적으로 이름을 지정하기 위해 move로 이름 변경
-    const copiedFile = new File(soundsDir, name);
-    if (copiedFile.exists && copiedFile.uri !== destFile.uri) {
-      copiedFile.move(destFile);
-    }
+    // UUID 기반 파일명으로 직접 복사 (copy(File)은 지정 경로에 복사)
+    sourceFile.copy(destFile);
 
     const finalUri = destFile.uri;
     const newSound: CustomSound = { id, name, uri: finalUri };
