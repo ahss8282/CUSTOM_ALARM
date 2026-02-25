@@ -16,6 +16,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Notifications from 'expo-notifications';
 import * as Haptics from 'expo-haptics';
 import { Ionicons } from '@expo/vector-icons';
+import { Audio } from 'expo-av';
 
 import { Colors } from '@/constants/theme';
 import { useSettingsStore } from '@/src/store/settings-store';
@@ -101,6 +102,38 @@ function pad(n: number) {
   return String(n).padStart(2, '0');
 }
 
+/* ─── 타이머 사운드 재생 유틸 ─── */
+// soundId: 'none' | 'default' | 'bell' | 'digital' | 'soft'
+// durationSec: 이 시간(초) 후 자동으로 재생 중지
+const TIMER_SOUND_SOURCES: Record<string, any> = {
+  default: require('@/assets/sounds/alarm_default.mp3'),
+  bell:    require('@/assets/sounds/alarm_bell.mp3'),
+  digital: require('@/assets/sounds/alarm_digital.mp3'),
+  soft:    require('@/assets/sounds/alarm_soft.mp3'),
+};
+
+async function playTimerSound(soundId: string, durationSec: number): Promise<void> {
+  if (soundId === 'none') return;
+  const source = TIMER_SOUND_SOURCES[soundId];
+  if (!source) return;
+  try {
+    await Audio.setAudioModeAsync({ playsInSilentModeIOS: true, staysActiveInBackground: false });
+    const { sound } = await Audio.Sound.createAsync(source, { shouldPlay: true, isLooping: true });
+    setTimeout(async () => {
+      try { await sound.stopAsync(); await sound.unloadAsync(); } catch {}
+    }, durationSec * 1000);
+  } catch {}
+}
+
+type TimerSoundId = 'none' | 'default' | 'bell' | 'digital' | 'soft';
+const SOUND_OPTIONS: { id: TimerSoundId; labelKo: string; icon: string }[] = [
+  { id: 'none',    labelKo: '없음',    icon: 'volume-mute-outline' },
+  { id: 'default', labelKo: '기본',    icon: 'musical-notes-outline' },
+  { id: 'bell',    labelKo: '벨',      icon: 'notifications-outline' },
+  { id: 'digital', labelKo: '디지털', icon: 'pulse-outline' },
+  { id: 'soft',    labelKo: '부드러운', icon: 'leaf-outline' },
+];
+
 /* ─── Normal Timer ─── */
 function NormalTimer({ colors }: { colors: typeof Colors.light }) {
   const { t } = useTranslation();
@@ -109,6 +142,7 @@ function NormalTimer({ colors }: { colors: typeof Colors.light }) {
   const [pickM, setPickM] = useState(5);
   const [pickS, setPickS] = useState(0);
   const [remaining, setRemaining] = useState(0);
+  const [timerSound, setTimerSound] = useState<TimerSoundId>('default');
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const clearTimer = () => {
@@ -132,6 +166,7 @@ function NormalTimer({ colors }: { colors: typeof Colors.light }) {
             intervalRef.current = null;
             setTimerState('idle');
             Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+            playTimerSound(timerSound, 10);
             Notifications.scheduleNotificationAsync({
               content: { title: t('timer.finished'), body: t('timer.finishedMessage'), sound: true },
               trigger: null,
@@ -186,6 +221,39 @@ function NormalTimer({ colors }: { colors: typeof Colors.light }) {
               </TouchableOpacity>
             ))}
           </ScrollView>
+
+          {/* 사운드 선택 */}
+          <View style={{ marginBottom: 14 }}>
+            <Text style={[ntStyles.soundLabel, { color: colors.subText }]}>완료 사운드</Text>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={{ flexDirection: 'row', gap: 8 }}
+            >
+              {SOUND_OPTIONS.map((opt) => {
+                const active = timerSound === opt.id;
+                return (
+                  <TouchableOpacity
+                    key={opt.id}
+                    style={[ntStyles.soundChip, {
+                      backgroundColor: active ? colors.primary : colors.card,
+                      borderColor: active ? colors.primary : colors.border,
+                    }]}
+                    onPress={() => setTimerSound(opt.id)}
+                  >
+                    <Ionicons
+                      name={opt.icon as any}
+                      size={14}
+                      color={active ? '#6B6BA8' : colors.subText}
+                    />
+                    <Text style={[ntStyles.soundChipText, { color: active ? '#6B6BA8' : colors.subText }]}>
+                      {opt.labelKo}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </View>
 
           <TouchableOpacity
             style={[ntStyles.startBtn, { backgroundColor: totalSet === 0 ? colors.border : colors.primary }]}
@@ -248,6 +316,9 @@ const ntStyles = StyleSheet.create({
   sep: { fontSize: 28, fontWeight: '700', paddingBottom: 16 },
   preset: { paddingHorizontal: 16, paddingVertical: 10, borderRadius: 20, borderWidth: 1 },
   presetText: { fontSize: 14, fontWeight: '500' },
+  soundLabel: { fontSize: 11, fontWeight: '600', letterSpacing: 0.5, textTransform: 'uppercase', marginBottom: 8 },
+  soundChip: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 20, borderWidth: 1 },
+  soundChipText: { fontSize: 13, fontWeight: '600' },
   startBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 18, borderRadius: 16 },
   startBtnText: { fontSize: 18, fontWeight: '700', color: '#6B6BA8' },
   countdownContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 24 },
@@ -333,77 +404,72 @@ function WorkoutTimer({ colors }: { colors: typeof Colors.light }) {
   const [timerState, setTimerState] = useState<TimerState>('idle');
   const [currentIdx, setCurrentIdx] = useState(0);
   const [remaining, setRemaining] = useState(0);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [editingSlot, setEditingSlot] = useState<TimerSlot | null>(null);
 
-  const clearTimer = () => {
-    if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
-  };
+  // ─ 인터벌 내부에서 사용하는 값은 모두 ref로 관리 (stale closure 방지)
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const remainingRef = useRef(0);
+  const currentIdxRef = useRef(0);
+  const slotsRef = useRef(slots);
+
+  // slots 최신 참조 유지
+  useEffect(() => { slotsRef.current = slots; }, [slots]);
+
+  // 언마운트 시 인터벌 정리
+  useEffect(() => () => { if (intervalRef.current) clearInterval(intervalRef.current); }, []);
 
   const slotToSeconds = (s: TimerSlot) => s.hours * 3600 + s.minutes * 60 + s.seconds;
 
-  const startSlot = (idx: number) => {
-    if (idx >= slots.length) {
-      // 모든 구간 완료
-      clearTimer();
-      setTimerState('idle');
-      setCurrentIdx(0);
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      Notifications.scheduleNotificationAsync({
-        content: { title: t('timer.workoutFinished'), body: t('timer.workoutFinishedMessage'), sound: true },
-        trigger: null,
-      });
-      Alert.alert(t('timer.workoutFinished'), t('timer.workoutFinishedMessage'), [{ text: t('timer.ok') }]);
-      return;
-    }
-    setCurrentIdx(idx);
-    setRemaining(slotToSeconds(slots[idx]));
-    setTimerState('running');
+  const stopInterval = () => {
+    if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
   };
 
-  useEffect(() => {
-    if (timerState === 'running') {
-      intervalRef.current = setInterval(() => {
-        setRemaining((prev) => {
-          if (prev <= 1) {
-            clearInterval(intervalRef.current!);
-            intervalRef.current = null;
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-            // 다음 구간으로 (useEffect cleanup 후 startSlot 호출은 콜백으로)
-            setCurrentIdx((ci) => {
-              const next = ci + 1;
-              if (next >= slots.length) {
-                setTimerState('finished' as TimerState);
-              } else {
-                setRemaining(slotToSeconds(slots[next]));
-                setTimerState('running');
-              }
-              return next;
-            });
-            return 0;
-          }
-          return prev - 1;
-        });
-      }, 1000);
-    }
-    return () => clearTimer();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [timerState]);
+  /**
+   * 인터벌을 시작합니다. remainingRef.current 값부터 카운트다운합니다.
+   * 슬롯 완료 시 다음 슬롯을 직접 시작(재귀 호출)하므로
+   * timerState 변경에 의존하지 않습니다.
+   */
+  const launchInterval = () => {
+    stopInterval();
+    intervalRef.current = setInterval(() => {
+      remainingRef.current -= 1;
+      setRemaining(remainingRef.current);
 
-  // 완료 처리
-  useEffect(() => {
-    if ((timerState as string) === 'finished') {
-      setTimerState('idle');
-      setCurrentIdx(0);
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      Notifications.scheduleNotificationAsync({
-        content: { title: t('timer.workoutFinished'), body: t('timer.workoutFinishedMessage'), sound: true },
-        trigger: null,
-      });
-      Alert.alert(t('timer.workoutFinished'), t('timer.workoutFinishedMessage'), [{ text: t('timer.ok') }]);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [timerState]);
+      if (remainingRef.current <= 0) {
+        stopInterval();
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+
+        // 완료된 구간의 사운드 설정 확인 후 재생 (3초)
+        const completedSlot = slotsRef.current[currentIdxRef.current];
+        if (completedSlot?.soundOnComplete) {
+          playTimerSound('default', 3);
+        }
+
+        const next = currentIdxRef.current + 1;
+        if (next >= slotsRef.current.length) {
+          // 모든 구간 완료
+          setTimerState('idle');
+          setCurrentIdx(0);
+          currentIdxRef.current = 0;
+          remainingRef.current = 0;
+          setRemaining(0);
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          Notifications.scheduleNotificationAsync({
+            content: { title: t('timer.workoutFinished'), body: t('timer.workoutFinishedMessage'), sound: true },
+            trigger: null,
+          });
+          Alert.alert(t('timer.workoutFinished'), t('timer.workoutFinishedMessage'), [{ text: t('timer.ok') }]);
+        } else {
+          // 다음 슬롯 시작
+          currentIdxRef.current = next;
+          setCurrentIdx(next);
+          remainingRef.current = slotToSeconds(slotsRef.current[next]);
+          setRemaining(remainingRef.current);
+          launchInterval();
+        }
+      }
+    }, 1000);
+  };
 
   const isIdle = timerState === 'idle';
   const isRunning = timerState === 'running';
@@ -489,10 +555,23 @@ function WorkoutTimer({ colors }: { colors: typeof Colors.light }) {
                   </Text>
                 )}
               </View>
+              {/* 구간 완료 사운드 토글 */}
+              <TouchableOpacity
+                onPress={() => updateSlot(item.id, { soundOnComplete: !item.soundOnComplete })}
+                style={{ padding: 6 }}
+                hitSlop={8}
+                disabled={!isIdle}
+              >
+                <Ionicons
+                  name={item.soundOnComplete ? 'notifications-outline' : 'notifications-off-outline'}
+                  size={18}
+                  color={item.soundOnComplete ? colors.primary : colors.border}
+                />
+              </TouchableOpacity>
               {isIdle && (
                 <TouchableOpacity
                   onPress={() => deleteSlot(item.id)}
-                  style={{ padding: 8 }}
+                  style={{ padding: 6 }}
                   hitSlop={8}
                 >
                   <Ionicons name="trash-outline" size={18} color={colors.danger} />
@@ -539,7 +618,13 @@ function WorkoutTimer({ colors }: { colors: typeof Colors.light }) {
             style={[wtStyles.startBtn, { backgroundColor: slots.length === 0 ? colors.border : colors.primary }]}
             onPress={() => {
               if (slots.length === 0) return;
-              startSlot(0);
+              // 첫 번째 슬롯 시작
+              currentIdxRef.current = 0;
+              setCurrentIdx(0);
+              remainingRef.current = slotToSeconds(slots[0]);
+              setRemaining(remainingRef.current);
+              setTimerState('running');
+              launchInterval();
             }}
             disabled={slots.length === 0}
           >
@@ -550,21 +635,34 @@ function WorkoutTimer({ colors }: { colors: typeof Colors.light }) {
           <View style={{ flexDirection: 'row', gap: 12 }}>
             <TouchableOpacity
               style={[wtStyles.secondaryBtn, { borderColor: colors.border }]}
-              onPress={() => { clearTimer(); setTimerState('idle'); setCurrentIdx(0); setRemaining(0); }}
+              onPress={() => {
+                stopInterval();
+                setTimerState('idle');
+                setCurrentIdx(0);
+                currentIdxRef.current = 0;
+                remainingRef.current = 0;
+                setRemaining(0);
+              }}
             >
               <Text style={[{ fontSize: 16, fontWeight: '600', color: colors.text }]}>{t('timer.cancel')}</Text>
             </TouchableOpacity>
             {isRunning ? (
               <TouchableOpacity
                 style={[wtStyles.startBtn, { backgroundColor: colors.primary, flex: 1 }]}
-                onPress={() => { clearTimer(); setTimerState('paused'); }}
+                onPress={() => {
+                  stopInterval(); // 인터벌 중지, remainingRef는 현재 값 유지
+                  setTimerState('paused');
+                }}
               >
                 <Text style={wtStyles.startBtnText}>{t('timer.pause')}</Text>
               </TouchableOpacity>
             ) : (
               <TouchableOpacity
                 style={[wtStyles.startBtn, { backgroundColor: colors.primary, flex: 1 }]}
-                onPress={() => setTimerState('running')}
+                onPress={() => {
+                  setTimerState('running');
+                  launchInterval(); // remainingRef.current에서 이어서 재개
+                }}
               >
                 <Text style={wtStyles.startBtnText}>{t('timer.resume')}</Text>
               </TouchableOpacity>

@@ -30,13 +30,26 @@ function getNextAlarmText(alarms: Alarm[], t: (key: string) => string): string {
   let minMs = Infinity;
 
   for (const alarm of enabled) {
-    if (alarm.weekdays.length === 0) {
+    if (alarm.scheduleType === 'calendar') {
+      // 캘린더제: calendarDates 중 알람 시각이 아직 지나지 않은 날짜를 탐색
+      for (const dateStr of alarm.calendarDates) {
+        const trigger = new Date(
+          `${dateStr}T${String(alarm.hour).padStart(2, '0')}:${String(alarm.minute).padStart(2, '0')}:00`
+        );
+        if (trigger > now) {
+          const diff = trigger.getTime() - now.getTime();
+          if (diff < minMs) minMs = diff;
+        }
+      }
+    } else if (alarm.weekdays.length === 0) {
+      // 요일제 - 한 번만 울림 (요일 미선택)
       const candidate = new Date();
       candidate.setHours(alarm.hour, alarm.minute, 0, 0);
       if (candidate <= now) candidate.setDate(candidate.getDate() + 1);
       const diff = candidate.getTime() - now.getTime();
       if (diff < minMs) minMs = diff;
     } else {
+      // 요일제 - 요일 반복
       for (const weekday of alarm.weekdays) {
         let daysAhead = weekday - now.getDay();
         if (daysAhead < 0) daysAhead += 7;
@@ -97,19 +110,24 @@ function AlarmCard({
   const { t } = useTranslation();
   const timeStr = `${String(alarm.hour).padStart(2, '0')}:${String(alarm.minute).padStart(2, '0')}`;
 
-  // 캘린더제: 오늘 이후 가까운 날짜 2개 추출
+  // 캘린더제: 알람 시각이 아직 지나지 않은 가까운 날짜 2개 추출
   const upcomingCalendarDates = useMemo(() => {
     if (alarm.scheduleType !== 'calendar') return [];
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const now = new Date();
     return alarm.calendarDates
-      .filter((d) => new Date(d) >= today)
+      .filter((d) => {
+        // 날짜 자정이 아닌, 해당 날짜의 실제 알람 시각 기준으로 비교
+        const trigger = new Date(
+          `${d}T${String(alarm.hour).padStart(2, '0')}:${String(alarm.minute).padStart(2, '0')}:00`
+        );
+        return trigger > now;
+      })
       .slice(0, 2)
       .map((d) => {
-        const dt = new Date(d);
-        return `${dt.getMonth() + 1}/${dt.getDate()}`;
+        const [, month, day] = d.split('-');
+        return `${parseInt(month, 10)}/${parseInt(day, 10)}`;
       });
-  }, [alarm.scheduleType, alarm.calendarDates]);
+  }, [alarm.scheduleType, alarm.calendarDates, alarm.hour, alarm.minute]);
 
   const repeatLabel =
     alarm.scheduleType === 'calendar'

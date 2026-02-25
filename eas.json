@@ -1,0 +1,30 @@
+{
+  "cli": {
+    "version": ">= 18.0.4",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_GOOGLE_CALENDAR_API_KEY": "$EXPO_PUBLIC_GOOGLE_CALENDAR_API_KEY"
+      }
+    },
+    "preview": {
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_GOOGLE_CALENDAR_API_KEY": "$EXPO_PUBLIC_GOOGLE_CALENDAR_API_KEY"
+      }
+    },
+    "production": {
+      "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_GOOGLE_CALENDAR_API_KEY": "$EXPO_PUBLIC_GOOGLE_CALENDAR_API_KEY"
+      }
+    }
+  },
+  "submit": {
+    "production": {}
+  }
+}

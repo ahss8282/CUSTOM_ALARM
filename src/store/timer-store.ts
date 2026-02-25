@@ -6,6 +6,7 @@ export interface TimerSlot {
   hours: number;
   minutes: number;
   seconds: number;
+  soundOnComplete: boolean; // 구간 완료 시 사운드 재생 여부
 }
 
 const genId = () => Math.random().toString(36).slice(2);
@@ -20,13 +21,13 @@ interface TimerStore {
 
 export const useTimerStore = create<TimerStore>((set, get) => ({
   slots: [
-    { id: genId(), label: '', hours: 0, minutes: 1, seconds: 0 },
+    { id: genId(), label: '', hours: 0, minutes: 1, seconds: 0, soundOnComplete: true },
   ],
 
   addSlot: () => {
     const { slots } = get();
     if (slots.length >= 10) return;
-    set({ slots: [...slots, { id: genId(), label: '', hours: 0, minutes: 1, seconds: 0 }] });
+    set({ slots: [...slots, { id: genId(), label: '', hours: 0, minutes: 1, seconds: 0, soundOnComplete: true }] });
   },
 
   updateSlot: (id, changes) =>
