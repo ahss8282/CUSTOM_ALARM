@@ -8,6 +8,7 @@ import {
   cancelAlarmWithNotifee,
   scheduleSnoozeWithNotifee,
   setupNotifeeChannel,
+  scheduleUpcomingNotifications,
 } from './notification-notifee';
 
 const isExpoGo = Constants.executionEnvironment === 'storeClient';
@@ -65,6 +66,7 @@ export const scheduleAlarmNotification = async (alarm: Alarm): Promise<void> => 
   if (canUseNotifee()) {
     try {
       await scheduleAlarmWithNotifee(alarm);
+      await scheduleUpcomingNotifications(alarm); // 30분 전 예정 알림
       return; // notifee 성공 시에만 return
     } catch (e) {
       console.warn('[notification] notifee 스케줄 실패, expo-notifications로 폴백:', e);

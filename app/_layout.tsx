@@ -183,10 +183,47 @@ export default function RootLayout() {
          * DELIVERED: 알람 시각에 알림 발동 → alarm-ringing 화면으로 이동
          * PRESS: 사용자가 알림 탭 → alarm-ringing 화면으로 이동
          */
-        const unsubscribe = notifee.onForegroundEvent(({ type, detail }) => {
+        const unsubscribe = notifee.onForegroundEvent(async ({ type, detail }) => {
           if (type === EventType.DELIVERED || type === EventType.PRESS) {
             const alarmId = detail.notification?.data?.alarmId as string | undefined;
             if (alarmId) navigateToRinging(alarmId);
+          }
+
+          // ── 포그라운드 '지금 해제' 버튼 처리 ──────────────────────────
+          if (type === EventType.ACTION_PRESS &&
+              detail.pressAction?.id === 'cancel_alarm') {
+            const alarmId = detail.notification?.data?.alarmId as string | undefined;
+            const triggerNotifId = detail.notification?.data?.triggerNotifId as string | undefined;
+            const displayedNotifId = detail.notification?.id as string | undefined;
+            if (!alarmId) return;
+
+            if (triggerNotifId) {
+              // 1. 해당 회차 알람 트리거만 취소
+              try { await notifee.cancelTriggerNotification(triggerNotifId); } catch {}
+
+              // 2. 표시된 예정 알림 닫기
+              if (displayedNotifId) {
+                try { await notifee.cancelDisplayedNotification(displayedNotifId); } catch {}
+              }
+
+              const weekdayMatch = triggerNotifId.match(/_w(\d+)$/);
+              if (weekdayMatch) {
+                // 요일 반복: 다음 주 동일 요일 재등록 (isEnabled 유지)
+                const weekday = parseInt(weekdayMatch[1]);
+                const alarm = useAlarmStore.getState().alarms.find((a) => a.id === alarmId);
+                if (alarm && alarm.isEnabled) {
+                  const { rescheduleWeekdayOccurrence } = await import('@/src/utils/notification-notifee');
+                  await rescheduleWeekdayOccurrence(alarm, weekday);
+                }
+              } else if (triggerNotifId.endsWith('_once')) {
+                // 일회성 알람: Zustand로 비활성화 (UI 즉시 반영)
+                await useAlarmStore.getState().updateAlarm(alarmId, { isEnabled: false });
+              }
+              // 캘린더 (_d{date}): 해당 날짜 트리거만 취소됨, 나머지 날짜 유지
+            } else {
+              // triggerNotifId 없음: 이전 버전 호환 fallback
+              await useAlarmStore.getState().updateAlarm(alarmId, { isEnabled: false });
+            }
           }
         });
         notifeeFgUnsubRef.current = unsubscribe;

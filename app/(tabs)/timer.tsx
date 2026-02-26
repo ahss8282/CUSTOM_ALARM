@@ -11,12 +11,14 @@ import {
   Modal,
 } from 'react-native';
 import { useState, useRef, useEffect } from 'react';
+import * as Battery from 'expo-battery';
 import { useTranslation } from 'react-i18next';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Notifications from 'expo-notifications';
 import * as Haptics from 'expo-haptics';
 import { Ionicons } from '@expo/vector-icons';
-import { Audio } from 'expo-av';
+import { createAudioPlayer, setAudioModeAsync } from 'expo-audio';
+import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 
 import { Colors } from '@/constants/theme';
 import { useSettingsStore } from '@/src/store/settings-store';
@@ -24,6 +26,34 @@ import { useTimerStore, TimerSlot } from '@/src/store/timer-store';
 
 type TimerMode = 'normal' | 'workout';
 type TimerState = 'idle' | 'running' | 'paused';
+
+/* ─── 배터리 경고 체크 ─── */
+/**
+ * 배터리 잔량이 5% 미만인 경우 경고 팝업을 띄운다.
+ * '유지하고 시작'을 선택하면 onStart() 콜백 실행.
+ * '타이머 사용 안 함'을 선택하면 타이머를 시작하지 않는다.
+ * 배터리 정보를 얻을 수 없거나(시뮬레이터 등) 5% 이상이면 onStart()를 바로 실행.
+ */
+async function checkBatteryAndStart(onStart: () => void): Promise<void> {
+  try {
+    const level = await Battery.getBatteryLevelAsync();
+    // level: 0.0~1.0, -1이면 정보 없음(시뮬레이터 등)
+    if (level >= 0 && level < 0.05) {
+      Alert.alert(
+        '배터리 부족',
+        `배터리 잔량이 ${Math.round(level * 100)}%입니다.\n화면 켜짐 유지를 사용하면 배터리가 더 빨리 소모됩니다.`,
+        [
+          { text: '타이머 사용 안 함', style: 'cancel' },
+          { text: '유지하고 시작', onPress: onStart },
+        ]
+      );
+      return;
+    }
+  } catch {
+    // expo-battery 미지원 환경(시뮬레이터 등)은 체크 없이 바로 시작
+  }
+  onStart();
+}
 
 /* ─── 드럼롤 피커 (타이머용, 작은 크기) ─── */
 const DRUM_HOURS = Array.from({ length: 24 }, (_, i) => i);
@@ -117,10 +147,14 @@ async function playTimerSound(soundId: string, durationSec: number): Promise<voi
   const source = TIMER_SOUND_SOURCES[soundId];
   if (!source) return;
   try {
-    await Audio.setAudioModeAsync({ playsInSilentModeIOS: true, staysActiveInBackground: false });
-    const { sound } = await Audio.Sound.createAsync(source, { shouldPlay: true, isLooping: true });
-    setTimeout(async () => {
-      try { await sound.stopAsync(); await sound.unloadAsync(); } catch {}
+    // expo-audio(신 API) 사용 — alarm-ringing.tsx와 동일한 API로 통일하여 오디오 세션 충돌 방지
+    // shouldPlayInBackground: false — 타이머 완료음은 포그라운드 전용
+    await setAudioModeAsync({ playsInSilentMode: true, shouldPlayInBackground: false });
+    const player = createAudioPlayer(source);
+    player.loop = true;
+    player.play();
+    setTimeout(() => {
+      try { player.pause(); player.remove(); } catch {}
     }, durationSec * 1000);
   } catch {}
 }
@@ -156,6 +190,18 @@ function NormalTimer({ colors }: { colors: typeof Colors.light }) {
     { label: t('timer.presets.30min'), h: 0, m: 30, s: 0 },
     { label: t('timer.presets.1hr'), h: 1, m: 0, s: 0 },
   ];
+
+  // 타이머 실행/일시정지 중에는 화면이 꺼지지 않도록 유지
+  // idle 상태가 되거나 컴포넌트가 언마운트될 때 해제
+  const KEEP_AWAKE_TAG = 'normal-timer';
+  useEffect(() => {
+    if (timerState === 'running' || timerState === 'paused') {
+      activateKeepAwakeAsync(KEEP_AWAKE_TAG);
+    } else {
+      deactivateKeepAwake(KEEP_AWAKE_TAG);
+    }
+    return () => { deactivateKeepAwake(KEEP_AWAKE_TAG); };
+  }, [timerState]);
 
   useEffect(() => {
     if (timerState === 'running') {
@@ -259,8 +305,10 @@ function NormalTimer({ colors }: { colors: typeof Colors.light }) {
             style={[ntStyles.startBtn, { backgroundColor: totalSet === 0 ? colors.border : colors.primary }]}
             onPress={() => {
               if (totalSet === 0) return;
-              setRemaining(totalSet);
-              setTimerState('running');
+              checkBatteryAndStart(() => {
+                setRemaining(totalSet);
+                setTimerState('running');
+              });
             }}
             disabled={totalSet === 0}
           >
@@ -417,6 +465,18 @@ function WorkoutTimer({ colors }: { colors: typeof Colors.light }) {
 
   // 언마운트 시 인터벌 정리
   useEffect(() => () => { if (intervalRef.current) clearInterval(intervalRef.current); }, []);
+
+  // 타이머 실행/일시정지 중에는 화면이 꺼지지 않도록 유지
+  // idle 상태가 되거나 컴포넌트가 언마운트될 때 해제
+  const KEEP_AWAKE_TAG_WT = 'workout-timer';
+  useEffect(() => {
+    if (timerState === 'running' || timerState === 'paused') {
+      activateKeepAwakeAsync(KEEP_AWAKE_TAG_WT);
+    } else {
+      deactivateKeepAwake(KEEP_AWAKE_TAG_WT);
+    }
+    return () => { deactivateKeepAwake(KEEP_AWAKE_TAG_WT); };
+  }, [timerState]);
 
   const slotToSeconds = (s: TimerSlot) => s.hours * 3600 + s.minutes * 60 + s.seconds;
 
@@ -618,13 +678,15 @@ function WorkoutTimer({ colors }: { colors: typeof Colors.light }) {
             style={[wtStyles.startBtn, { backgroundColor: slots.length === 0 ? colors.border : colors.primary }]}
             onPress={() => {
               if (slots.length === 0) return;
-              // 첫 번째 슬롯 시작
-              currentIdxRef.current = 0;
-              setCurrentIdx(0);
-              remainingRef.current = slotToSeconds(slots[0]);
-              setRemaining(remainingRef.current);
-              setTimerState('running');
-              launchInterval();
+              checkBatteryAndStart(() => {
+                // 첫 번째 슬롯 시작
+                currentIdxRef.current = 0;
+                setCurrentIdx(0);
+                remainingRef.current = slotToSeconds(slots[0]);
+                setRemaining(remainingRef.current);
+                setTimerState('running');
+                launchInterval();
+              });
             }}
             disabled={slots.length === 0}
           >

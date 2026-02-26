@@ -31,6 +31,7 @@ export const canUseNotifee = (): boolean => {
 };
 
 export const NOTIFEE_CHANNEL_ID = 'alarm_fullscreen';
+export const UPCOMING_CHANNEL_ID = 'alarm_upcoming';
 
 /* ─── 채널 초기화 ─── */
 export const setupNotifeeChannel = async (): Promise<string> => {
@@ -52,6 +53,18 @@ export const setupNotifeeChannel = async (): Promise<string> => {
       vibration: true,
       vibrationPattern: [300, 500, 200, 500], // notifee: 모든 값이 양수여야 함 (0 불가)
     });
+
+    // 예정 알람 알림 채널 (무음, 진동 없음)
+    await notifee.createChannel({
+      id: UPCOMING_CHANNEL_ID,
+      name: '예정된 알람',
+      importance: AndroidImportance.LOW,
+      visibility: AndroidVisibility.PUBLIC,
+      bypassDnd: false,
+      vibration: false,
+      sound: '',
+    });
+
     return NOTIFEE_CHANNEL_ID;
   } catch (e) {
     console.warn('[notifee] 채널 생성 실패:', e);
@@ -171,6 +184,175 @@ export const cancelAlarmWithNotifee = async (alarmId: string): Promise<void> => 
     console.warn('[notifee] 알람 취소 실패:', e);
   }
 };
+
+/* ─── 예정 알람 알림 (30분 전, '지금 해제' 액션 포함) ─── */
+/**
+ * 알람 발동 30분 전에 조용한 알림을 표시합니다.
+ * 이미 30분 이내인 경우에는 즉시 알림을 표시합니다.
+ * '지금 해제' 버튼으로 알람을 취소할 수 있습니다.
+ *
+ * 알림 ID 규칙: {alarmId}_up_once / {alarmId}_up_w{weekday} / {alarmId}_up_d{date}
+ * cancelAlarmWithNotifee()의 startsWith(`${alarmId}_`) 패턴이 이 ID도 포괄합니다.
+ */
+export async function scheduleUpcomingNotifications(alarm: Alarm): Promise<void> {
+  if (!canUseNotifee()) return;
+  try {
+    const notifee = (await import('@notifee/react-native')).default;
+    const { TriggerType, AndroidImportance, AndroidVisibility } =
+      await import('@notifee/react-native');
+
+    const hh = String(alarm.hour).padStart(2, '0');
+    const mm = String(alarm.minute).padStart(2, '0');
+    const THIRTY_MIN_MS = 30 * 60 * 1000;
+    const now = Date.now();
+
+    /**
+     * triggerNotifId: '지금 해제' 버튼을 눌렀을 때 어떤 회차 알람을 취소해야 하는지 식별합니다.
+     * 예: alarmId가 'abc'이고 매주 월요일 알람이면 triggerNotifId = 'abc_w1'
+     */
+    const buildUpcomingNotif = (id: string, triggerNotifId: string) => ({
+      id,
+      title: '예정된 알람',
+      body: `${hh}:${mm}${alarm.name ? ` — ${alarm.name}` : ''}`,
+      data: { alarmId: alarm.id, type: 'upcoming', triggerNotifId },
+      android: {
+        channelId: UPCOMING_CHANNEL_ID,
+        importance: AndroidImportance.LOW,
+        visibility: AndroidVisibility.PUBLIC,
+        smallIcon: 'ic_notification',
+        actions: [
+          {
+            id: 'cancel_alarm',
+            title: '지금 해제',
+          },
+        ],
+      },
+    });
+
+    const scheduleOne = async (notifId: string, triggerNotifId: string, alarmTimestamp: number) => {
+      const upcomingTimestamp = alarmTimestamp - THIRTY_MIN_MS;
+      // 알람 발동까지 30분 이내 = 즉시 표시 (단, 알람 시각이 아직 미래일 때만)
+      if (upcomingTimestamp <= now) {
+        if (alarmTimestamp > now) {
+          await notifee.displayNotification(buildUpcomingNotif(notifId, triggerNotifId));
+        }
+        return;
+      }
+      await notifee.createTriggerNotification(
+        buildUpcomingNotif(notifId, triggerNotifId),
+        {
+          type: TriggerType.TIMESTAMP,
+          timestamp: upcomingTimestamp,
+          alarmManager: { allowWhileIdle: true },
+        }
+      );
+    };
+
+    if (alarm.scheduleType === 'weekly') {
+      if (alarm.weekdays.length === 0) {
+        // 한 번만 울리는 알람
+        const target = new Date();
+        target.setHours(alarm.hour, alarm.minute, 0, 0);
+        if (target.getTime() <= now) target.setDate(target.getDate() + 1);
+        await scheduleOne(`${alarm.id}_up_once`, `${alarm.id}_once`, target.getTime());
+      } else {
+        // 요일 반복 알람
+        for (const weekday of alarm.weekdays) {
+          const timestamp = getNextWeekdayTimestamp(alarm.hour, alarm.minute, weekday);
+          await scheduleOne(`${alarm.id}_up_w${weekday}`, `${alarm.id}_w${weekday}`, timestamp);
+        }
+      }
+    } else {
+      // calendar 모드
+      for (const dateStr of alarm.calendarDates) {
+        const trigger = new Date(`${dateStr}T${hh}:${mm}:00`).getTime();
+        if (trigger > now) {
+          await scheduleOne(`${alarm.id}_up_d${dateStr}`, `${alarm.id}_d${dateStr}`, trigger);
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('[notifee] 예정 알람 알림 스케줄 실패:', e);
+  }
+}
+
+/* ─── 요일 반복 알람 단일 회차 재등록 ─── */
+/**
+ * '지금 해제'로 이번 주 특정 요일 회차를 건너뛴 뒤 다음 주 동일 요일을 재등록합니다.
+ * isEnabled는 건드리지 않으므로 알람 자체는 계속 활성 상태입니다.
+ */
+export async function rescheduleWeekdayOccurrence(alarm: Alarm, weekday: number): Promise<void> {
+  if (!canUseNotifee()) return;
+  try {
+    const notifee = (await import('@notifee/react-native')).default;
+    const {
+      TriggerType,
+      AndroidImportance,
+      AndroidVisibility,
+      AndroidCategory,
+    } = await import('@notifee/react-native');
+
+    const channelId = await setupNotifeeChannel();
+    const hh = String(alarm.hour).padStart(2, '0');
+    const mm = String(alarm.minute).padStart(2, '0');
+    const now = Date.now();
+
+    // 다음 주 해당 요일 발동 시각 계산
+    // (이번 주 회차를 방금 취소했으므로 무조건 +7일 기준으로 계산)
+    const next = new Date();
+    next.setHours(alarm.hour, alarm.minute, 0, 0);
+    const daysUntil = (weekday - next.getDay() + 7) % 7;
+    next.setDate(next.getDate() + (daysUntil === 0 ? 7 : daysUntil));
+    // 계산 결과가 여전히 과거라면(엣지케이스) 7일 추가
+    if (next.getTime() <= now) next.setDate(next.getDate() + 7);
+
+    const triggerNotifId = `${alarm.id}_w${weekday}`;
+
+    // 알람 본체 재등록
+    await notifee.createTriggerNotification(
+      {
+        id: triggerNotifId,
+        title: alarm.name || '알람',
+        body: `${hh}:${mm}`,
+        data: { alarmId: alarm.id },
+        android: {
+          channelId,
+          category: AndroidCategory.ALARM,
+          fullScreenAction: { id: 'alarm_fullscreen', launchActivity: 'default' },
+          importance: AndroidImportance.HIGH,
+          visibility: AndroidVisibility.PUBLIC,
+          pressAction: { id: 'default', launchActivity: 'default' },
+          bypassDnd: true,
+        },
+      },
+      { type: TriggerType.TIMESTAMP, timestamp: next.getTime(), alarmManager: { allowWhileIdle: true } }
+    );
+
+    // 예정 알림 재등록 (30분 전)
+    const THIRTY_MIN_MS = 30 * 60 * 1000;
+    const upcomingTs = next.getTime() - THIRTY_MIN_MS;
+    if (upcomingTs > now) {
+      await notifee.createTriggerNotification(
+        {
+          id: `${alarm.id}_up_w${weekday}`,
+          title: '예정된 알람',
+          body: `${hh}:${mm}${alarm.name ? ` — ${alarm.name}` : ''}`,
+          data: { alarmId: alarm.id, type: 'upcoming', triggerNotifId },
+          android: {
+            channelId: UPCOMING_CHANNEL_ID,
+            importance: AndroidImportance.LOW,
+            visibility: AndroidVisibility.PUBLIC,
+            smallIcon: 'ic_notification',
+            actions: [{ id: 'cancel_alarm', title: '지금 해제' }],
+          },
+        },
+        { type: TriggerType.TIMESTAMP, timestamp: upcomingTs, alarmManager: { allowWhileIdle: true } }
+      );
+    }
+  } catch (e) {
+    console.warn('[notifee] 요일 반복 알람 재등록 실패:', e);
+  }
+}
 
 /* ─── 스누즈: notifee로 N분 뒤 단발 알람 ─── */
 export const scheduleSnoozeWithNotifee = async (

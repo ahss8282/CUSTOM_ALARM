@@ -16,6 +16,7 @@ React Native(Expo) 기반 iOS/Android 알람 & 타이머 앱입니다.
 | i18n | i18next + react-i18next + expo-localization |
 | 날짜 처리 | date-fns |
 | 공휴일 | Google Calendar API |
+| 배터리 | expo-battery |
 
 ## 주요 명령어
 
@@ -58,10 +59,10 @@ src/
     timer-store.ts     # 운동 타이머 슬롯 관리
     sound-store.ts     # 커스텀 알람음 관리 (파일 복사 + AsyncStorage)
   tasks/
-    alarm-task.ts      # notifee onBackgroundEvent — 요일 반복 알람 재등록
+    alarm-task.ts      # notifee onBackgroundEvent — 요일 반복 재등록 + 백그라운드 알람 해제
   utils/
     notification.ts          # expo-notifications 알람 스케줄 (iOS + fallback)
-    notification-notifee.ts  # notifee 채널 생성 + 알람 스케줄 (Android)
+    notification-notifee.ts  # notifee 채널 생성 + 알람 스케줄 + 예정 알림 (Android)
     notification-android.ts  # notifee fullScreenIntent 알림 발송 유틸
     battery-optimization.ts  # 배터리 최적화 제외 요청 (Android)
     alarm-permissions.ts     # SCHEDULE_EXACT_ALARM / USE_FULL_SCREEN_INTENT 권한
@@ -157,6 +158,19 @@ EXPO_PUBLIC_GOOGLE_CALENDAR_API_KEY=...  # 공휴일 API (선택)
 
 `.env` 파일로 관리하며 소스코드에 직접 노출하지 않습니다.
 
+## 알람 예정 알림 (30분 전)
+
+알람 발동 30분 전에 조용한 알림을 표시합니다. 알림에는 **'지금 해제'** 액션 버튼이 포함되어 있어, 앱을 열지 않고 바로 해당 알람을 취소할 수 있습니다.
+
+| 알람 종류 | '지금 해제' 동작 |
+|---|---|
+| 일회성 알람 | 알람 비활성화 (`isEnabled: false`) |
+| 요일 반복 알람 | 이번 주 해당 회차만 건너뜀, **다음 주는 정상 동작** |
+| 캘린더 알람 | 해당 날짜만 취소, **다른 날짜는 정상 동작** |
+
+- Android (notifee) 전용 기능입니다.
+- 알림 채널: `alarm_upcoming` (무음, 진동 없음, 방해금지 모드 준수)
+
 ## 구현 단계
 
 | Phase | 내용 | 상태 |
@@ -166,3 +180,4 @@ EXPO_PUBLIC_GOOGLE_CALENDAR_API_KEY=...  # 공휴일 API (선택)
 | Phase 3 | 알람 배경, 스누즈 강화(수학문제), 전체화면 알람 오버레이 | 완료 |
 | Phase 4 | Android 알람 신뢰도 강화 (fullScreenIntent, WakeLock, 커스텀 알람음) | 완료 |
 | Phase 4 버그수정 | 알람 화면 중복 표시, 화면 미기동, 커스텀 알람음 저장 버그 수정 | 완료 |
+| Phase 5 | 타이머 배터리 경고, 예정 알람 알림(30분 전 + 지금 해제) | 완료 |
