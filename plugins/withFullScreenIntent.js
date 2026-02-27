@@ -15,7 +15,7 @@
  *
  * 사용법: app.json의 plugins 배열에 "./plugins/withFullScreenIntent" 추가
  */
-const { withAndroidManifest, withMainActivity } = require('@expo/config-plugins');
+const { withAndroidManifest, withMainActivity, withProjectBuildGradle } = require('@expo/config-plugins');
 
 /**
  * AndroidManifest.xml에서 MainActivity 요소를 찾아 반환합니다.
@@ -59,7 +59,7 @@ function withScreenOnWhenLocked(config) {
     let contents = config.modResults.contents;
 
     // 이미 패치된 경우 건너뜀 (재빌드 시 중복 삽입 방지)
-    if (contents.includes('setShowWhenLocked')) return config;
+    if (contents.includes('onNewIntent_alarm_patched')) return config;
 
     // ── 1. import android.os.Build 추가 ──────────────────────────────────
     // Expo SDK 54의 MainActivity.kt는 package 선언 다음에 import 블록이 옵니다.
@@ -71,33 +71,23 @@ function withScreenOnWhenLocked(config) {
       );
     }
 
-    // ── 2. onCreate에 코드 삽입 ──────────────────────────────────────────
-    // super.onCreate(null) 또는 super.onCreate(savedInstanceState) 두 패턴 모두 처리
-    const screenOnCode =
-      '\n    // fullScreenIntent: 화면이 꺼진 상태에서 알람 발동 시 화면 켜기\n' +
-      '    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {\n' +
-      '      setShowWhenLocked(true)\n' +
-      '      setTurnScreenOn(true)\n' +
-      '    }';
-
-    contents = contents.replace(
-      /super\.onCreate\((?:savedInstanceState|null)\)/,
-      (match) => `${match}${screenOnCode}`
-    );
-
-    // ── 3. onNewIntent 오버라이드 추가 ───────────────────────────────────
+    // ── 2. onNewIntent 오버라이드 추가 ───────────────────────────────────
+    // onCreate에는 setShowWhenLocked/setTurnScreenOn을 삽입하지 않습니다.
+    // 이유: onCreate에 항상 적용하면 앱 사용 중에도 이 플래그가 유지되어
+    //       Samsung 등 일부 기기에서 화면 자동 꺼짐을 방해합니다.
+    // 대신 Manifest의 android:showWhenLocked / android:turnScreenOn 속성이
+    // 콜드 스타트(앱 종료 후 알람 발동)를 처리하고,
+    // onNewIntent(앱이 백그라운드에 살아있을 때 알람 발동)는 아래 코드가 처리합니다.
     // 이미 onNewIntent가 있으면 중복 추가하지 않음
     if (!contents.includes('onNewIntent')) {
       const onNewIntentCode =
-        '\n  override fun onNewIntent(intent: android.content.Intent) {\n' +
+        '\n  // onNewIntent_alarm_patched\n' +
+        '  override fun onNewIntent(intent: android.content.Intent) {\n' +
         '    super.onNewIntent(intent)\n' +
-        '    // fullScreenIntent: 백그라운드 상태에서 알람이 발동할 때 화면 켜기\n' +
-        '    // Manifest의 android:turnScreenOn은 Activity 신규 생성 시에만 적용되므로\n' +
-        '    // 백그라운드 재사용 경로(onNewIntent)에서는 코드로 직접 설정해야 합니다.\n' +
-        '    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {\n' +
-        '      setShowWhenLocked(true)\n' +
-        '      setTurnScreenOn(true)\n' +
-        '    }\n' +
+        '    // setShowWhenLocked / setTurnScreenOn은 alarm-ringing 화면에서\n' +
+        '    // AlarmAudio.setLockScreenFlags()로 직접 제어합니다.\n' +
+        '    // 여기서 무조건 true로 설정하면 타이머 알림 등 모든 Intent에서\n' +
+        '    // 잠금화면 플래그가 영구 설정되는 버그가 발생합니다.\n' +
         '  }';
 
       // 클래스의 마지막 닫는 중괄호 앞에 삽입
@@ -139,11 +129,14 @@ module.exports = function withFullScreenIntent(config) {
   config = withAndroidManifest(config, (config) => {
     const manifest = config.modResults;
 
-    // MainActivity에 잠금화면 + 화면 켜기 속성 추가 (콜드 스타트 대비)
+    // showWhenLocked / turnScreenOn은 alarm-ringing 화면에서
+    // AlarmAudio.setLockScreenFlags()로 런타임에 제어합니다.
+    // 매니페스트에 true로 고정하면 타이머 알림 등 모든 화면 켜기 시
+    // 잠금화면 위에 앱이 노출되는 버그가 발생합니다.
     const mainActivity = findMainActivity(manifest);
     if (mainActivity) {
-      mainActivity.$['android:showWhenLocked'] = 'true';
-      mainActivity.$['android:turnScreenOn'] = 'true';
+      mainActivity.$['android:showWhenLocked'] = 'false';
+      mainActivity.$['android:turnScreenOn'] = 'false';
     }
 
     // FOREGROUND_SERVICE 권한 추가 (fullScreenIntent에 필요)
@@ -154,6 +147,19 @@ module.exports = function withFullScreenIntent(config) {
 
   // Step 2: MainActivity.kt에 런타임 Window 플래그 삽입 (백그라운드 재사용 경로 대비)
   config = withScreenOnWhenLocked(config);
+
+  // Step 3: android/build.gradle에 notifee 로컬 Maven 저장소 추가
+  // prebuild --clean 시 build.gradle이 재생성되므로 플러그인이 자동 삽입합니다.
+  config = withProjectBuildGradle(config, (config) => {
+    const notifeeRepo = "maven { url \"$rootDir/../node_modules/@notifee/react-native/android/libs\" }";
+    if (!config.modResults.contents.includes('notifee/react-native/android/libs')) {
+      config.modResults.contents = config.modResults.contents.replace(
+        /maven \{ url 'https:\/\/www\.jitpack\.io' \}/,
+        (match) => `${match}\n    // @notifee/react-native 로컬 AAR 저장소\n    ${notifeeRepo}`
+      );
+    }
+    return config;
+  });
 
   return config;
 };

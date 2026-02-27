@@ -53,3 +53,16 @@ export const moveAppToBackground = async (): Promise<void> => {
 
 export const isNativeAlarmAudioAvailable = () =>
   Platform.OS === 'android' && !!AlarmAudio;
+
+/**
+ * 잠금화면 위 표시 플래그를 설정/해제합니다 (Android 전용).
+ * 알람 해제 시 false를 전달하면 이후 일반 화면에서 최근 앱 버튼이 복원됩니다.
+ */
+export const setLockScreenFlags = async (show: boolean): Promise<void> => {
+  if (Platform.OS !== 'android' || !AlarmAudio) return;
+  try {
+    await AlarmAudio.setLockScreenFlags(show);
+  } catch {
+    // 무시
+  }
+};

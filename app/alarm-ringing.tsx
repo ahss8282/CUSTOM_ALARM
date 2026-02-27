@@ -15,7 +15,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { createAudioPlayer, setAudioModeAsync } from 'expo-audio';
+import { Audio } from 'expo-av';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -24,8 +24,8 @@ import { Asset } from 'expo-asset';
 import { useAlarmStore } from '@/src/store/alarm-store';
 import { useSoundStore, isCustomSoundId, parseCustomSoundId } from '@/src/store/sound-store';
 import { scheduleSnoozeNotification } from '@/src/utils/notification';
-import { playAlarmNative, stopAlarmNative, isNativeAlarmAudioAvailable, moveAppToBackground } from '@/src/utils/alarm-audio-native';
-import { useKeepAwake } from 'expo-keep-awake';
+import { playAlarmNative, stopAlarmNative, isNativeAlarmAudioAvailable, moveAppToBackground, setLockScreenFlags } from '@/src/utils/alarm-audio-native';
+import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 
 const { width: SCREEN_W } = Dimensions.get('window');
 
@@ -54,8 +54,8 @@ export default function AlarmRingingScreen() {
   const { customSounds, loadSounds } = useSoundStore();
   useEffect(() => { loadSounds(); }, []);
 
-  /* ── 사운드 (createAudioPlayer: 수동 lifecycle 관리, 이중 해제 방지) ── */
-  const playerRef = useRef<ReturnType<typeof createAudioPlayer> | null>(null);
+  /* ── 사운드 (expo-av Audio.Sound: 수동 lifecycle 관리, 이중 해제 방지) ── */
+  const playerRef = useRef<Audio.Sound | null>(null);
 
   /* ── 현재 시각 ── */
   const [now, setNow] = useState(new Date());
@@ -65,7 +65,10 @@ export default function AlarmRingingScreen() {
   }, []);
 
   /* ── 화면 켜기 (expo-keep-awake): 알람 울림 중 화면이 꺼지지 않도록 ── */
-  useKeepAwake();
+  useEffect(() => {
+    activateKeepAwakeAsync('alarm-ringing');
+    return () => { deactivateKeepAwake('alarm-ringing'); };
+  }, []);
 
   /* ── soundId에 따른 오디오 소스 결정 ── */
   const getAudioSource = () => {
@@ -111,21 +114,29 @@ export default function AlarmRingingScreen() {
           }
         }
 
-        // iOS 또는 네이티브 실패 시: expo-audio 사용
-        // playsInSilentMode: true → iOS 무음 스위치 우회
-        await setAudioModeAsync({
-          playsInSilentMode: true,
-          interruptionMode: 'doNotMix',
-          shouldPlayInBackground: true,
-        });
-        const p = createAudioPlayer(source);
-        if (!mounted) { p.remove(); return; }
-        p.volume = volume;
-        p.loop = true;
-        p.play();
-        playerRef.current = p;
+        // iOS 또는 네이티브 실패 시: expo-av Audio.Sound 사용
+        // playsInSilentModeIOS: true → iOS 무음 스위치 우회
+        try {
+          await Audio.setAudioModeAsync({
+            playsInSilentModeIOS: true,
+            staysActiveInBackground: true,
+          });
+        } catch {
+          // 오디오 모드 설정 실패 시 무시하고 재생 시도
+        }
+        try {
+          const { sound } = await Audio.Sound.createAsync(source, {
+            isLooping: true,
+            volume,
+            shouldPlay: true,
+          });
+          if (!mounted) { await sound.unloadAsync(); return; }
+          playerRef.current = sound;
+        } catch {
+          // 사운드 파일 없을 경우 무시
+        }
       } catch {
-        // 사운드 파일 없을 경우 무시
+        // 예상치 못한 에러 무시
       }
     };
     start();
@@ -133,7 +144,7 @@ export default function AlarmRingingScreen() {
       mounted = false;
       // Android 네이티브 오디오 정지
       stopAlarmNative();
-      playerRef.current?.remove();
+      playerRef.current?.unloadAsync();
       playerRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -152,8 +163,11 @@ export default function AlarmRingingScreen() {
   /* ── 종료 공통 처리 ── */
   const stopAndClose = useCallback(async () => {
     stopAlarmNative();
-    playerRef.current?.pause();
+    await playerRef.current?.stopAsync();
+    await playerRef.current?.unloadAsync();
     playerRef.current = null;
+    // 잠금화면 플래그 해제: 이후 일반 화면에서 최근 앱 버튼 복원
+    await setLockScreenFlags(false);
     if (alarmId) await AsyncStorage.removeItem(snoozeCountKey(alarmId));
     // pending_alarm_id 및 notifee 표시 알림 취소:
     // getDisplayedNotifications()가 앱 재실행 시 같은 알림을 다시 찾아
@@ -191,8 +205,11 @@ export default function AlarmRingingScreen() {
     await AsyncStorage.setItem(key, String(used + 1));
     await scheduleSnoozeNotification(alarm, alarm.snooze.intervalMinutes);
     stopAlarmNative();
-    playerRef.current?.pause();
+    await playerRef.current?.stopAsync();
+    await playerRef.current?.unloadAsync();
     playerRef.current = null;
+    // 잠금화면 플래그 해제
+    await setLockScreenFlags(false);
     // 현재 알람 알림만 취소 (스누즈 알림은 유지해야 하므로 cancelAllNotifications 불가)
     // pending_alarm_id도 제거해 앱 재실행 시 알람 화면이 다시 뜨지 않도록 합니다.
     if (alarmId) await AsyncStorage.removeItem('pending_alarm_id');

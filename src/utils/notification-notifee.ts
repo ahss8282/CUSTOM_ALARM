@@ -31,45 +31,49 @@ export const canUseNotifee = (): boolean => {
 };
 
 export const NOTIFEE_CHANNEL_ID = 'alarm_fullscreen';
-export const UPCOMING_CHANNEL_ID = 'alarm_upcoming';
+export const UPCOMING_CHANNEL_ID = 'alarm_upcoming_v4';
 
 /* ─── 채널 초기화 ─── */
 export const setupNotifeeChannel = async (): Promise<string> => {
   if (!canUseNotifee()) return NOTIFEE_CHANNEL_ID;
-  try {
-    const notifee = (await import('@notifee/react-native')).default;
-    const { AndroidImportance, AndroidVisibility } = await import('@notifee/react-native');
 
-    // 이미 존재하는 채널이라도 동일 ID로 createChannel을 호출하면 무시됩니다.
-    // 단, 처음 생성 시 importance/sound/vibration 이 적용되므로
-    // 앱 설치 직후 or 채널 삭제 후 재생성 시 올바른 값이 들어가야 합니다.
+  const notifee = (await import('@notifee/react-native')).default;
+  const { AndroidImportance, AndroidVisibility } = await import('@notifee/react-native');
+
+  // ── 알람 채널 (fullScreenIntent 용) ──────────────────────────────────────
+  // 각 채널을 독립 try-catch로 분리: 한 채널 실패가 다른 채널 생성을 막지 않도록 합니다.
+  try {
     await notifee.createChannel({
       id: NOTIFEE_CHANNEL_ID,
       name: '알람',
-      importance: AndroidImportance.HIGH,  // Samsung이 HIGH 이상만 fullscreen 허용
+      importance: AndroidImportance.HIGH,
       visibility: AndroidVisibility.PUBLIC,
       bypassDnd: true,
-      sound: 'default',                    // 사운드 없으면 Samsung이 낮은 우선순위로 처리
+      sound: 'default',
       vibration: true,
-      vibrationPattern: [300, 500, 200, 500], // notifee: 모든 값이 양수여야 함 (0 불가)
+      vibrationPattern: [300, 500, 200, 500],
     });
+  } catch (e) {
+    console.warn('[notifee] 알람 채널 생성 실패:', e);
+  }
 
-    // 예정 알람 알림 채널 (무음, 진동 없음)
+  // ── 예정 알람 채널 (30분 전 무음 알림) ─────────────────────────────────
+  // importance: LOW → 소리·진동 원천 차단, 헤드업 배너 미표시, 알림 트레이에만 표시
+  // 예정 알림은 헤드업이 불필요하므로 LOW가 가장 적합
+  try {
     await notifee.createChannel({
       id: UPCOMING_CHANNEL_ID,
       name: '예정된 알람',
       importance: AndroidImportance.LOW,
       visibility: AndroidVisibility.PUBLIC,
-      bypassDnd: false,
-      vibration: false,
       sound: '',
+      vibration: false,
     });
-
-    return NOTIFEE_CHANNEL_ID;
   } catch (e) {
-    console.warn('[notifee] 채널 생성 실패:', e);
-    return NOTIFEE_CHANNEL_ID; // 실패해도 ID는 반환 (이미 존재할 수 있음)
+    console.warn('[notifee] 예정 알람 채널 생성 실패:', e);
   }
+
+  return NOTIFEE_CHANNEL_ID;
 };
 
 /* ─── 다음 특정 요일 발동 시각 계산 ─── */
@@ -197,6 +201,9 @@ export const cancelAlarmWithNotifee = async (alarmId: string): Promise<void> => 
 export async function scheduleUpcomingNotifications(alarm: Alarm): Promise<void> {
   if (!canUseNotifee()) return;
   try {
+    // 채널이 반드시 존재하도록 보장 (앱 재설치 후 채널 미생성 방어)
+    await setupNotifeeChannel();
+
     const notifee = (await import('@notifee/react-native')).default;
     const { TriggerType, AndroidImportance, AndroidVisibility } =
       await import('@notifee/react-native');
@@ -217,13 +224,13 @@ export async function scheduleUpcomingNotifications(alarm: Alarm): Promise<void>
       data: { alarmId: alarm.id, type: 'upcoming', triggerNotifId },
       android: {
         channelId: UPCOMING_CHANNEL_ID,
-        importance: AndroidImportance.LOW,
         visibility: AndroidVisibility.PUBLIC,
-        smallIcon: 'ic_notification',
+        vibrationPattern: [],   // 알림 레벨에서도 진동 없음 명시
+        pressAction: { id: 'default', launchActivity: 'default' },
         actions: [
           {
-            id: 'cancel_alarm',
             title: '지금 해제',
+            pressAction: { id: 'cancel_alarm' },
           },
         ],
       },
@@ -340,10 +347,10 @@ export async function rescheduleWeekdayOccurrence(alarm: Alarm, weekday: number)
           data: { alarmId: alarm.id, type: 'upcoming', triggerNotifId },
           android: {
             channelId: UPCOMING_CHANNEL_ID,
-            importance: AndroidImportance.LOW,
             visibility: AndroidVisibility.PUBLIC,
-            smallIcon: 'ic_notification',
-            actions: [{ id: 'cancel_alarm', title: '지금 해제' }],
+            vibrationPattern: [],
+            pressAction: { id: 'default', launchActivity: 'default' },
+            actions: [{ title: '지금 해제', pressAction: { id: 'cancel_alarm' } }],
           },
         },
         { type: TriggerType.TIMESTAMP, timestamp: upcomingTs, alarmManager: { allowWhileIdle: true } }

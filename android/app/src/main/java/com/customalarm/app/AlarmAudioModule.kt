@@ -1,117 +1,111 @@
 package com.customalarm.app
 
-import android.content.Context
+import android.app.Activity
 import android.media.AudioAttributes
 import android.media.AudioManager
 import android.media.MediaPlayer
 import android.net.Uri
-import com.facebook.react.bridge.ReactApplicationContext
-import com.facebook.react.bridge.ReactContextBaseJavaModule
-import com.facebook.react.bridge.ReactMethod
-import com.facebook.react.bridge.Promise
+import android.os.Build
+import com.facebook.react.bridge.*
 
 /**
  * AlarmAudioModule
  *
- * STREAM_ALARM 스트림을 사용해 알람 사운드를 재생합니다.
- * STREAM_ALARM은 Android의 무음/진동 모드를 무시하고 소리를 재생합니다.
- * (단, 완전 무음 알람 볼륨이 0이면 소리 없음)
- *
- * JS에서 NativeModules.AlarmAudio.play(uri, volume) / .stop() 으로 사용합니다.
+ * STREAM_ALARM으로 오디오를 재생합니다.
+ * STREAM_ALARM은 기기의 미디어 볼륨(STREAM_MUSIC)이 아닌 알람 볼륨을 사용하므로
+ * 무음 모드·진동 모드에서도 알람 볼륨이 0이 아니면 소리가 납니다.
  */
-class AlarmAudioModule(private val reactContext: ReactApplicationContext) :
+class AlarmAudioModule(reactContext: ReactApplicationContext) :
     ReactContextBaseJavaModule(reactContext) {
 
     private var mediaPlayer: MediaPlayer? = null
 
-    override fun getName() = "AlarmAudio"
+    override fun getName(): String = "AlarmAudio"
 
     /**
-     * 알람 사운드를 재생합니다.
-     * @param uri 오디오 파일 URI (file:// 또는 resource URI)
-     * @param volume 볼륨 (0.0 ~ 1.0)
+     * 지정한 URI의 오디오 파일을 STREAM_ALARM으로 반복 재생합니다.
+     * @param uri    file:// URI
+     * @param volume 0.0 ~ 1.0
      */
     @ReactMethod
-    fun play(uri: String, volume: Double, promise: Promise) {
+    fun play(uri: String, volume: Float, promise: Promise) {
         try {
-            // 기존 재생 중이면 멈춤
-            stopInternal()
+            stop(null) // 기존 재생 중지
+            val player = MediaPlayer()
 
-            val audioManager = reactContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-
-            // STREAM_ALARM 볼륨을 최소 1 이상으로 보장 (완전 음소거 방지)
-            val maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_ALARM)
-            val currentVol = audioManager.getStreamVolume(AudioManager.STREAM_ALARM)
-            if (currentVol == 0) {
-                audioManager.setStreamVolume(
-                    AudioManager.STREAM_ALARM,
-                    (maxVol * 0.8).toInt(),
-                    0
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                player.setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_ALARM)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build()
                 )
+            } else {
+                @Suppress("DEPRECATION")
+                player.setAudioStreamType(AudioManager.STREAM_ALARM)
             }
 
-            val player = MediaPlayer()
-            player.setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_ALARM)          // STREAM_ALARM과 동등
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                    .build()
-            )
-
-            val parsedUri = Uri.parse(uri)
-            player.setDataSource(reactContext, parsedUri)
+            player.setDataSource(reactApplicationContext, Uri.parse(uri))
             player.isLooping = true
-            player.setVolume(volume.toFloat(), volume.toFloat())
+            player.setVolume(volume, volume)
             player.prepare()
             player.start()
             mediaPlayer = player
-
             promise.resolve(null)
         } catch (e: Exception) {
-            promise.reject("ALARM_AUDIO_ERROR", e.message, e)
+            promise.reject("PLAY_ERROR", e.message, e)
         }
     }
 
-    /**
-     * 알람 사운드를 멈춥니다.
-     */
+    /** 재생을 멈추고 리소스를 해제합니다. */
     @ReactMethod
-    fun stop(promise: Promise) {
+    fun stop(promise: Promise?) {
         try {
-            stopInternal()
-            promise.resolve(null)
+            mediaPlayer?.let {
+                if (it.isPlaying) it.stop()
+                it.release()
+            }
+            mediaPlayer = null
+            promise?.resolve(null)
         } catch (e: Exception) {
-            promise.reject("ALARM_AUDIO_ERROR", e.message, e)
+            promise?.reject("STOP_ERROR", e.message, e)
         }
     }
 
     /**
      * 앱을 백그라운드로 이동합니다.
-     * BackHandler.exitApp()이 호출하는 System.exit(0) 대신 이 메서드를 사용합니다.
-     * System.exit(0)은 삼성 One UI에서 강제 종료로 인식되어
-     * 이후 AlarmManager가 앱을 재시작하지 못하는 문제가 발생합니다.
-     * moveTaskToBack(true)는 홈 버튼을 누른 것과 동일한 효과입니다.
+     * BackHandler.exitApp() 대신 사용하여 AlarmManager가 앱을 재시작할 수 있도록 합니다.
      */
     @ReactMethod
     fun moveToBackground(promise: Promise) {
         try {
-            reactContext.currentActivity?.moveTaskToBack(true)
+            reactApplicationContext.currentActivity?.moveTaskToBack(true)
             promise.resolve(null)
         } catch (e: Exception) {
-            promise.reject("MOVE_BG_ERROR", e.message, e)
+            promise.reject("BACKGROUND_ERROR", e.message, e)
         }
     }
 
-    private fun stopInternal() {
-        mediaPlayer?.let {
-            if (it.isPlaying) it.stop()
-            it.release()
+    /**
+     * 잠금화면 위 표시 플래그를 설정/해제합니다.
+     *
+     * 알람이 해제된 뒤 false로 호출하면 이후 일반 화면 사용 시
+     * 네비게이션 바에 최근 앱 버튼이 정상적으로 표시됩니다.
+     * 알람 발동 시 true로 호출하면 잠금화면 위에 화면이 표시됩니다.
+     */
+    @ReactMethod
+    fun setLockScreenFlags(show: Boolean, promise: Promise) {
+        try {
+            val activity: Activity? = reactApplicationContext.currentActivity
+            if (activity != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                activity.runOnUiThread {
+                    activity.setShowWhenLocked(show)
+                    activity.setTurnScreenOn(show)
+                }
+            }
+            promise.resolve(null)
+        } catch (e: Exception) {
+            promise.reject("LOCK_SCREEN_ERROR", e.message, e)
         }
-        mediaPlayer = null
-    }
-
-    override fun invalidate() {
-        super.invalidate()
-        stopInternal()
     }
 }

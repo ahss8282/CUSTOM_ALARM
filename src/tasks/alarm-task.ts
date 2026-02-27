@@ -31,6 +31,29 @@ if (!isExpoGo && Platform.OS === 'android') {
   const EventType = notifeeModule.EventType;
 
   notifee.onBackgroundEvent(async ({ type, detail }: { type: number; detail: any }) => {
+    // ── 백그라운드 알림 탭 처리 (화면 ON 상태에서 헤드업 알림 탭) ────────────
+    // 화면이 ON일 때 알람이 울리면 fullScreenIntent 대신 헤드업 알림이 표시됩니다.
+    // 사용자가 탭하면 EventType.PRESS가 발생합니다.
+    // 이 경우 알람 울림 화면을 띄우지 않고 알람 목록 화면으로 이동합니다.
+    // _layout.tsx의 handleAppStateChange에서 이 키를 읽어 분기 처리합니다.
+    if (type === EventType.PRESS) {
+      const alarmId = detail.notification?.data?.alarmId as string | undefined;
+      const notifDataType = detail.notification?.data?.type as string | undefined;
+      if (alarmId && notifDataType !== 'upcoming') {
+        // 알림 탭 플래그 저장: handleAppStateChange에서 알람 목록으로 이동하도록 지시
+        await AsyncStorage.setItem('alarm_notif_pressed', alarmId);
+        // pending_alarm_id, alarm_delivered_at 정리: 앱 재실행 시 알람 울림 화면 재진입 방지
+        await AsyncStorage.removeItem('pending_alarm_id');
+        await AsyncStorage.removeItem('alarm_delivered_at');
+        // 탭된 알림 취소 (중복 처리 방지)
+        try {
+          const notifId = detail.notification?.id as string | undefined;
+          if (notifId) await notifee.cancelDisplayedNotification(notifId);
+        } catch {}
+      }
+      return;
+    }
+
     // ── 백그라운드 '지금 해제' 버튼 처리 ──────────────────────────────────
     if (type === EventType.ACTION_PRESS &&
         detail.pressAction?.id === 'cancel_alarm') {
@@ -113,11 +136,23 @@ if (!isExpoGo && Platform.OS === 'android') {
     if (type !== EventType.DELIVERED) return;
 
     const alarmId = detail.notification?.data?.alarmId as string | undefined;
-    if (!alarmId) return;
+    // 예정 알림(type: 'upcoming')은 재등록 처리 대상이 아님
+    const notifDataType = detail.notification?.data?.type as string | undefined;
+    if (!alarmId || notifDataType === 'upcoming') return;
 
-    // [fallback용] 사용자가 알림을 직접 닫은 뒤 앱을 수동으로 열었을 때를 대비해 저장합니다.
-    // 정상 경로(_layout.tsx의 getDisplayedNotifications)에서는 이 값을 사용하지 않습니다.
+    // fullScreenIntent 감지용: 알림 발동 시각을 저장합니다.
+    // handleAppStateChange에서 15초 이내 포그라운드 전환 = fullScreenIntent(화면 OFF)로 판단합니다.
     await AsyncStorage.setItem('pending_alarm_id', alarmId);
+    await AsyncStorage.setItem('alarm_delivered_at', String(Date.now()));
+
+    // 알람 발동 시 대응하는 예정 알림(30분 전 알림)을 자동 제거합니다.
+    // 예: 알람 ID 'abc_w1' → 예정 알림 ID 'abc_up_w1'
+    const notifId = detail.notification?.id as string | undefined;
+    if (notifId) {
+      const upcomingId = notifId.replace(`${alarmId}_`, `${alarmId}_up_`);
+      try { await notifee.cancelTriggerNotification(upcomingId); } catch {}
+      try { await notifee.cancelDisplayedNotification(upcomingId); } catch {}
+    }
 
     try {
       // AsyncStorage에서 해당 알람 데이터 조회

@@ -76,8 +76,9 @@ plugins/
   withFullScreenIntent.js  # Expo Config Plugin — Android 잠금화면 알람 지원
 
 android/app/src/main/java/com/customalarm/app/
-  MainActivity.kt        # WakeLock + setShowWhenLocked/setTurnScreenOn
-  AlarmAudioModule.kt    # STREAM_ALARM 재생, moveToBackground 네이티브 모듈
+  MainActivity.kt        # onNewIntent 라우팅 (잠금화면 플래그는 런타임 제어)
+  AlarmAudioModule.kt    # STREAM_ALARM 재생, moveToBackground, setLockScreenFlags 네이티브 모듈
+  AlarmAudioPackage.kt   # AlarmAudioModule RN 등록 패키지
 
 assets/sounds/
   alarm_default.mp3  # 기본 알람음 (soundId: 'default')
@@ -130,14 +131,24 @@ interface Alarm {
 ```
 AlarmManager (notifee TriggerType.TIMESTAMP)
   └── fullScreenAction → MainActivity.onNewIntent()
-        └── setShowWhenLocked(true) + setTurnScreenOn(true)
-        └── PowerManager.WakeLock (ACQUIRE_CAUSES_WAKEUP)
-              └── alarm-ringing.tsx 전체화면 표시
+        └── alarm-ringing.tsx 전체화면 표시
+              ├── AlarmAudio.setLockScreenFlags(true)   ← 알람 진입 시 런타임 설정
+              └── AlarmAudio.setLockScreenFlags(false)  ← 해제/스누즈 시 런타임 초기화
 ```
 
 - **앱 종료 상태**: `getInitialNotification()` → alarmId 추출 → alarm-ringing 라우팅
 - **백그라운드 상태**: `onForegroundEvent(DELIVERED)` → alarm-ringing 라우팅
 - **포그라운드 복귀**: `getDisplayedNotifications()` (1순위) → `pending_alarm_id` AsyncStorage (2순위)
+
+### 잠금화면 플래그 런타임 제어
+
+`android:showWhenLocked` / `android:turnScreenOn`을 매니페스트에 고정하면 일반 알림(타이머 알림 등) 수신 후에도 앱이 잠금화면 위에 표시되는 버그가 발생합니다.
+이를 방지하기 위해 **alarm-ringing 화면 진입/해제 시점에만** `AlarmAudio.setLockScreenFlags()`로 런타임 제어합니다.
+
+| 시점 | 호출 | 효과 |
+|------|------|------|
+| alarm-ringing 마운트 | `setLockScreenFlags(true)` | 잠금화면 위에 알람 표시 |
+| 알람 해제 / 스누즈 | `setLockScreenFlags(false)` | 이후 화면 켜기 시 일반 잠금화면 복원 |
 
 ## Android 필수 권한
 
@@ -181,3 +192,4 @@ EXPO_PUBLIC_GOOGLE_CALENDAR_API_KEY=...  # 공휴일 API (선택)
 | Phase 4 | Android 알람 신뢰도 강화 (fullScreenIntent, WakeLock, 커스텀 알람음) | 완료 |
 | Phase 4 버그수정 | 알람 화면 중복 표시, 화면 미기동, 커스텀 알람음 저장 버그 수정 | 완료 |
 | Phase 5 | 타이머 배터리 경고, 예정 알람 알림(30분 전 + 지금 해제) | 완료 |
+| 버그수정 (Phase 5 후) | STREAM_ALARM 적용(진동모드 알람음), 잠금화면 플래그 런타임 제어(타이머 알림 후 화면 켜기 버그) | 완료 |

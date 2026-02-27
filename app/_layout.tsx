@@ -107,46 +107,60 @@ export default function RootLayout() {
       setTimeout(() => router.replace(`/alarm-ringing?alarmId=${alarmId}`), 300);
     };
 
-    // ── AppState 리스너: 백그라운드 → 포그라운드 전환 시 알람 확인 ──────────
+    // ── AppState 리스너: 포그라운드 전환 시 화면 ON/OFF 분기 처리 ─────────────
     //
-    // [이전 방식의 문제]
-    // onBackgroundEvent(Headless JS)가 AsyncStorage에 pending_alarm_id를 저장하고,
-    // UI 스레드의 AppState 리스너가 읽는 방식은 두 프로세스 간 race condition이 있습니다.
+    // [화면 OFF + fullScreenIntent]
+    //   alarm-task.ts DELIVERED → pending_alarm_id + alarm_delivered_at 저장
+    //   fullScreenIntent가 앱을 즉시 포그라운드로 전환 → 15초 이내 전환 = fullScreenIntent 판단
+    //   → 알람 울림 화면으로 이동
     //
-    // [새로운 방식]
-    // 1순위: getDisplayedNotifications() — 알림은 fullScreenAction보다 먼저 표시됩니다.
-    //        앱이 포그라운드가 될 때 알림이 이미 표시 중이므로 race condition이 없습니다.
-    // 2순위: pending_alarm_id (AsyncStorage) — 사용자가 알림을 직접 닫은 후 앱을 수동으로
-    //        열었을 때 fallback으로 사용합니다.
+    // [화면 ON + 알림 탭 (백그라운드)]
+    //   alarm-task.ts PRESS → alarm_notif_pressed 저장 + pending/delivered 플래그 정리
+    //   → 알람 목록으로 이동
+    //
+    // [화면 ON + 앱 아이콘 탭]
+    //   alarm_delivered_at이 15초 초과 → 수동 진입으로 판단 → 아무 동작 없음
     const handleAppStateChange = async (nextState: AppStateStatus) => {
       const prev = appStateRef.current;
       appStateRef.current = nextState;
       if (prev !== 'active' && nextState === 'active') {
-        // 1순위: 현재 표시된 알람 알림 직접 조회
-        if (canUseNotifee()) {
-          try {
-            const { default: notifee } = await import('@notifee/react-native');
-            const displayed = await notifee.getDisplayedNotifications();
-            const alarmNotif = displayed.find(
-              (n) => {
-                const id = n.notification.data?.alarmId as string | undefined;
-                return id && id !== 'diag_test';
-              }
-            );
-            if (alarmNotif) {
-              const alarmId = alarmNotif.notification.data!.alarmId as string;
-              navigateToRinging(alarmId);
+        try {
+          // ── 화면 ON + 알림 탭: 알람 목록으로 이동 ──────────────────────
+          const pressedId = await AsyncStorage.getItem('alarm_notif_pressed');
+          if (pressedId) {
+            await AsyncStorage.removeItem('alarm_notif_pressed');
+            await AsyncStorage.removeItem('pending_alarm_id');
+            await AsyncStorage.removeItem('alarm_delivered_at');
+            setTimeout(() => router.replace('/(tabs)'), 300);
+            return;
+          }
+
+          // ── 화면 OFF + fullScreenIntent: 알람 울림 화면으로 이동 ─────────
+          //
+          // [타이밍 보정]
+          // fullScreenIntent가 앱을 포그라운드로 전환할 때 이 핸들러가 먼저 실행됩니다.
+          // alarm-task(헤드리스 프로세스)의 DELIVERED 비동기 저장이 아직 완료되지 않아
+          // pending_alarm_id / alarm_delivered_at이 없을 수 있습니다.
+          // 플래그가 없으면 500ms 대기 후 1회 재확인합니다.
+          let deliveredAt = await AsyncStorage.getItem('alarm_delivered_at');
+          let pendingId = await AsyncStorage.getItem('pending_alarm_id');
+          if (!deliveredAt || !pendingId) {
+            await new Promise<void>((r) => setTimeout(r, 500));
+            deliveredAt = await AsyncStorage.getItem('alarm_delivered_at');
+            pendingId = await AsyncStorage.getItem('pending_alarm_id');
+          }
+
+          if (deliveredAt && pendingId) {
+            const elapsed = Date.now() - parseInt(deliveredAt);
+            await AsyncStorage.removeItem('alarm_delivered_at');
+            if (elapsed < 15000) {
+              // fullScreenIntent 경로: 알람 울림 화면
+              await AsyncStorage.removeItem('pending_alarm_id');
+              navigateToRinging(pendingId);
               return;
             }
-          } catch {}
-        }
-
-        // 2순위: AsyncStorage fallback (알림을 직접 닫은 뒤 앱을 수동으로 연 경우)
-        try {
-          const pendingId = await AsyncStorage.getItem('pending_alarm_id');
-          if (pendingId) {
+            // 15초 초과 = 사용자가 나중에 수동으로 앱 열기 → 아무 동작 없음
             await AsyncStorage.removeItem('pending_alarm_id');
-            navigateToRinging(pendingId);
           }
         } catch {}
       }
@@ -163,30 +177,84 @@ export default function RootLayout() {
          */
         notifee.getInitialNotification().then(async (initial) => {
           const alarmId = initial?.notification?.data?.alarmId as string | undefined;
-          if (alarmId) {
-            navigateToRinging(alarmId);
+          const notifDataType = initial?.notification?.data?.type as string | undefined;
+          if (alarmId && notifDataType !== 'upcoming') {
+            // 알람 발동 시 대응하는 예정 알림 자동 제거
+            const initNotifId = initial?.notification?.id as string | undefined;
+            if (initNotifId) {
+              const upcomingId = initNotifId.replace(`${alarmId}_`, `${alarmId}_up_`);
+              try { await notifee.cancelTriggerNotification(upcomingId); } catch {}
+              try { await notifee.cancelDisplayedNotification(upcomingId); } catch {}
+            }
+
+            /**
+             * getInitialNotification()은 "앱이 종료된 상태에서 탭" 외에
+             * "백그라운드→포그라운드 탭"에서도 데이터를 반환할 수 있습니다.
+             *
+             * 구분 방법: PRESS 핸들러(alarm-task / onForegroundEvent)에서
+             * alarm_delivered_at을 제거합니다.
+             * → alarm_delivered_at이 남아있으면 미처리 알람 → 알람 울림 화면
+             * → alarm_delivered_at이 없으면 이미 처리됨 → 무시
+             */
+            const deliveredAt = await AsyncStorage.getItem('alarm_delivered_at');
+            if (deliveredAt) {
+              await AsyncStorage.removeItem('alarm_delivered_at');
+              await AsyncStorage.removeItem('pending_alarm_id');
+              navigateToRinging(alarmId);
+            }
             return;
           }
-          // 앱이 종료된 채로 AlarmManager가 발동 → onBackgroundEvent 실행 →
-          // pending_alarm_id 저장 → 앱 재시작 후 여기서 읽음
+          // initial notification 없음:
+          // 앱이 종료된 채로 AlarmManager가 발동 → onBackgroundEvent DELIVERED 실행 →
+          // pending_alarm_id + alarm_delivered_at 저장 → 앱 재시작 후 여기서 읽음
           try {
             const pendingId = await AsyncStorage.getItem('pending_alarm_id');
-            if (pendingId) {
+            const deliveredAt = await AsyncStorage.getItem('alarm_delivered_at');
+            if (pendingId && deliveredAt) {
               await AsyncStorage.removeItem('pending_alarm_id');
+              await AsyncStorage.removeItem('alarm_delivered_at');
               navigateToRinging(pendingId);
+            } else {
+              // 플래그 중 하나만 있는 stale 상태 → 정리
+              await AsyncStorage.multiRemove(['pending_alarm_id', 'alarm_delivered_at']);
             }
           } catch {}
         });
 
         /**
          * 앱이 포그라운드 상태에서 notifee 알림 이벤트 수신:
-         * DELIVERED: 알람 시각에 알림 발동 → alarm-ringing 화면으로 이동
-         * PRESS: 사용자가 알림 탭 → alarm-ringing 화면으로 이동
+         * DELIVERED: 알람 시각에 알림 발동 → 예정 알림 자동 제거
+         *            화면이 켜진 상태이므로 헤드업 알림만 표시 (자동 이동 안 함)
+         * PRESS: 사용자가 알림 탭 → 화면 ON 상태이므로 알람 목록 화면으로 이동 (알람 울림 화면 Skip)
          */
         const unsubscribe = notifee.onForegroundEvent(async ({ type, detail }) => {
-          if (type === EventType.DELIVERED || type === EventType.PRESS) {
+          // ── 포그라운드 알람 발동: 예정 알림 자동 제거 ──────────────────
+          if (type === EventType.DELIVERED) {
             const alarmId = detail.notification?.data?.alarmId as string | undefined;
-            if (alarmId) navigateToRinging(alarmId);
+            const notifDataType = detail.notification?.data?.type as string | undefined;
+            const notifId = detail.notification?.id as string | undefined;
+            if (alarmId && notifDataType !== 'upcoming' && notifId) {
+              const upcomingId = notifId.replace(`${alarmId}_`, `${alarmId}_up_`);
+              try { await notifee.cancelTriggerNotification(upcomingId); } catch {}
+              try { await notifee.cancelDisplayedNotification(upcomingId); } catch {}
+            }
+          }
+
+          if (type === EventType.PRESS) {
+            const alarmId = detail.notification?.data?.alarmId as string | undefined;
+            const notifDataType = detail.notification?.data?.type as string | undefined;
+            if (alarmId && notifDataType !== 'upcoming') {
+              // 앱이 포그라운드일 때 탭 = 화면 ON 상태 확정
+              // 알람 울림 화면 없이 알람 목록으로 이동하고 알림 취소
+              // pending 플래그 정리: 앱 재실행 시 알람 울림 화면 재진입 방지
+              await AsyncStorage.removeItem('pending_alarm_id');
+              await AsyncStorage.removeItem('alarm_delivered_at');
+              try {
+                const notifId = detail.notification?.id as string | undefined;
+                if (notifId) await notifee.cancelDisplayedNotification(notifId);
+              } catch {}
+              setTimeout(() => router.replace('/(tabs)'), 300);
+            }
           }
 
           // ── 포그라운드 '지금 해제' 버튼 처리 ──────────────────────────

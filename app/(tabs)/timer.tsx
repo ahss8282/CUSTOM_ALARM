@@ -19,10 +19,12 @@ import * as Haptics from 'expo-haptics';
 import { Ionicons } from '@expo/vector-icons';
 import { createAudioPlayer, setAudioModeAsync } from 'expo-audio';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
+import { Asset } from 'expo-asset';
 
 import { Colors } from '@/constants/theme';
 import { useSettingsStore } from '@/src/store/settings-store';
 import { useTimerStore, TimerSlot } from '@/src/store/timer-store';
+import { playAlarmNative, stopAlarmNative, isNativeAlarmAudioAvailable } from '@/src/utils/alarm-audio-native';
 
 type TimerMode = 'normal' | 'workout';
 type TimerState = 'idle' | 'running' | 'paused';
@@ -38,7 +40,7 @@ async function checkBatteryAndStart(onStart: () => void): Promise<void> {
   try {
     const level = await Battery.getBatteryLevelAsync();
     // level: 0.0~1.0, -1이면 정보 없음(시뮬레이터 등)
-    if (level >= 0 && level < 0.05) {
+    if (level >= 0 && level < 0.99) { // TODO: 테스트용 99%, 실제 배포 시 0.05로 변경
       Alert.alert(
         '배터리 부족',
         `배터리 잔량이 ${Math.round(level * 100)}%입니다.\n화면 켜짐 유지를 사용하면 배터리가 더 빨리 소모됩니다.`,
@@ -147,9 +149,25 @@ async function playTimerSound(soundId: string, durationSec: number): Promise<voi
   const source = TIMER_SOUND_SOURCES[soundId];
   if (!source) return;
   try {
-    // expo-audio(신 API) 사용 — alarm-ringing.tsx와 동일한 API로 통일하여 오디오 세션 충돌 방지
-    // shouldPlayInBackground: false — 타이머 완료음은 포그라운드 전용
-    await setAudioModeAsync({ playsInSilentMode: true, shouldPlayInBackground: false });
+    // Android: STREAM_ALARM으로 재생 — 무음/진동 모드에서도 알람 볼륨이 0이 아니면 재생됨
+    if (isNativeAlarmAudioAvailable()) {
+      const asset = Asset.fromModule(source as number);
+      await asset.downloadAsync();
+      const uri = asset.localUri ?? '';
+      if (uri) {
+        await playAlarmNative(uri, 1.0);
+        // durationSec 후 네이티브 오디오 정지
+        setTimeout(() => { stopAlarmNative(); }, durationSec * 1000);
+        return;
+      }
+    }
+
+    // iOS 또는 네이티브 모듈 미탑재 시: expo-audio 사용
+    // playsInSilentMode: true — iOS 무음 스위치 우회
+    // setAudioModeAsync 실패가 재생 자체를 막지 않도록 별도 try-catch 처리
+    try {
+      await setAudioModeAsync({ playsInSilentMode: true, shouldPlayInBackground: false });
+    } catch {}
     const player = createAudioPlayer(source);
     player.loop = true;
     player.play();

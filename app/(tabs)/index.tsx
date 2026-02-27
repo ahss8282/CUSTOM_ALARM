@@ -64,7 +64,8 @@ function getNextAlarmText(alarms: Alarm[], t: (key: string) => string): string {
   }
 
   if (minMs === Infinity) return t('alarm.noNextAlarm');
-  const totalMinutes = Math.floor(minMs / 60000);
+  // ceil: 1분 미만 남은 경우 0분이 아닌 1분으로 올림 표시
+  const totalMinutes = Math.ceil(minMs / 60000);
   const h = Math.floor(totalMinutes / 60);
   const m = totalMinutes % 60;
   return `${t('alarm.nextAlarm')} ${h > 0 ? `${h}시간 ` : ''}${m}분`;

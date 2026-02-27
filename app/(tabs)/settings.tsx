@@ -242,6 +242,47 @@ function AlarmDiagnostics({ colors }: { colors: typeof Colors.light }) {
     }
   };
 
+  const sendTestUpcomingNotification = async () => {
+    if (!NativeModules.NotifeeApiModule) {
+      Alert.alert('오류', 'notifee 네이티브 모듈이 없습니다. 재빌드가 필요합니다.');
+      return;
+    }
+    try {
+      const notifee = (await import('@notifee/react-native')).default;
+      const { AndroidImportance, AndroidVisibility } = await import('@notifee/react-native');
+
+      // 예정 알람 채널 생성 (없으면 생성, 있으면 무시됨)
+      await notifee.createChannel({
+        id: 'alarm_upcoming_v4',
+        name: '예정된 알람',
+        importance: AndroidImportance.LOW,
+        visibility: AndroidVisibility.PUBLIC,
+        sound: '',
+        vibration: false,
+      });
+
+      // 즉시 표시 (displayNotification)
+      await notifee.displayNotification({
+        id: 'diag_upcoming_test',
+        title: '예정된 알람 — 테스트',
+        body: `채널 alarm_upcoming_v4 테스트 (${new Date().toLocaleTimeString('ko-KR')})`,
+        data: { alarmId: 'diag_test', type: 'upcoming', triggerNotifId: 'diag_test_once' },
+        android: {
+          channelId: 'alarm_upcoming_v4',
+          vibrationPattern: [],
+          visibility: AndroidVisibility.PUBLIC,
+          pressAction: { id: 'default', launchActivity: 'default' },
+          actions: [{ title: '지금 해제', pressAction: { id: 'cancel_alarm' } }],
+        },
+      });
+
+      Alert.alert('예정 알림 표시됨', '알림 트레이에 "예정된 알람 — 테스트"가 표시되었는지 확인해 주세요.');
+      await runDiagnostics();
+    } catch (e: any) {
+      Alert.alert('예정 알림 표시 실패', e?.message ?? String(e));
+    }
+  };
+
   return (
     <>
       <SectionHeader title="🔧 알람 진단" colors={colors} />
@@ -258,6 +299,12 @@ function AlarmDiagnostics({ colors }: { colors: typeof Colors.light }) {
           style={{ backgroundColor: '#e74c3c', borderRadius: 8, padding: 10, alignItems: 'center', marginBottom: 8 }}
         >
           <Text style={{ color: '#fff', fontWeight: '600' }}>10초 뒤 테스트 알람 등록</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={sendTestUpcomingNotification}
+          style={{ backgroundColor: '#e67e22', borderRadius: 8, padding: 10, alignItems: 'center', marginBottom: 8 }}
+        >
+          <Text style={{ color: '#fff', fontWeight: '600' }}>예정 알림 즉시 표시 테스트</Text>
         </TouchableOpacity>
         {log ? (
           <Text selectable style={{ color: colors.text, fontFamily: 'monospace', fontSize: 12, lineHeight: 18 }}>
