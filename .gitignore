@@ -38,8 +38,19 @@ yarn-error.*
 # typescript
 *.tsbuildinfo
 
+# 자동 생성 파일 (npm run generate-licenses로 재생성)
+src/assets/licenses.txt
+src/assets/licenses.ts
+
 app-example
 
 # generated native folders
 /ios
-/android
+
+# android 빌드 산출물 (소스는 git 추적)
+/android/.gradle
+/android/build
+/android/app/build
+/android/app/.cxx
+/android/local.properties
+/android/app/debug.keystore
