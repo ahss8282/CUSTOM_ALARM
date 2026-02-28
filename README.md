@@ -1,195 +1,197 @@
 # Custom Alarm
 
-React Native(Expo) 기반 iOS/Android 알람 & 타이머 앱입니다.
+Android용 정밀 알람 & 타이머 앱입니다. 공휴일/주말 자동 제외, 캘린더 반복 주기, 커스텀 알람음, 잠금화면 전체화면 알람 등 기본 알람 앱에서 제공하지 않는 고급 기능을 지원합니다.
+
+---
+
+## 주요 기능
+
+### 알람
+
+#### 스케줄 방식
+| 방식 | 설명 |
+|------|------|
+| **요일 반복** | 매주 특정 요일(복수 선택)에 반복 |
+| **캘린더** | 달력에서 날짜를 직접 선택해 등록 |
+| **한 번만** | 요일 미선택 시 가장 가까운 해당 시각에 1회 발동 |
+
+#### 제외 조건 (요일 반복 / 캘린더 공통)
+| 옵션 | 동작 |
+|------|------|
+| **공휴일 제외** | 공휴일로 지정된 날 알람을 건너뜀 (Google Calendar API 기반, 9개국 지원) |
+| **주말 제외** | 토요일·일요일에 알람을 건너뜀 |
+
+#### 캘린더 전용 반복 주기 옵션
+| 옵션 | 동작 |
+|------|------|
+| **N주/N개월마다 반복** | 선택한 날짜를 기준으로 주기적으로 알람 반복 |
+| **반복 일자 제외** | 반복 주기 날짜에는 알람을 울리지 않고, 나머지 날에 울림 (예: 격주 출근일 제외 → 재택 알람) |
+
+#### 알람음 & 진동
+- 내장 알람음 4종 (기본 / 벨 / 디지털 / 부드러운)
+- 기기 파일에서 직접 오디오 파일 추가 가능 (MP3, WAV 등)
+- 볼륨 개별 조절 (0–100)
+- 진동 모드에서도 알람음 정상 재생 (STREAM_ALARM 사용)
+
+#### 스누즈
+- 간격: 1 / 3 / 5 / 10 / 15 / 30분 선택
+- 최대 횟수 설정 또는 무제한
+- **강제 해제 모드**: 수학 문제를 풀어야 알람 종료 (졸음 방지)
+
+#### 알람 배경
+- 색상 팔레트 8종
+- 갤러리에서 이미지 직접 선택
+
+#### 예정 알람 알림 (Android 전용)
+알람 발동 30분 전에 조용한 알림을 표시합니다. **'지금 해제'** 버튼으로 앱을 열지 않고 알람을 취소할 수 있습니다.
+
+| 알람 종류 | '지금 해제' 동작 |
+|-----------|----------------|
+| 일회성 | 알람 비활성화 |
+| 요일 반복 | 이번 주 해당 회차만 건너뜀, 다음 주는 정상 동작 |
+| 캘린더 | 해당 날짜만 취소, 다른 날짜는 정상 동작 |
+
+---
+
+### 타이머
+
+#### 일반 타이머
+- 드럼롤 피커로 시간 설정 (시·분·초)
+- 자주 쓰는 시간 프리셋 제공
+- 완료 시 알람음 선택 가능
+
+#### 운동 타이머
+- 운동 슬롯을 여러 개 등록해 순차 실행
+- 각 슬롯마다 이름·시간 개별 설정
+- 슬롯 전환 시 알림 발동
+
+#### 배터리 경고
+배터리 5% 미만 시 타이머 시작 전 경고 팝업 표시
+
+---
+
+### 설정
+
+| 항목 | 내용 |
+|------|------|
+| 테마 | 라이트 / 다크 / 시스템 자동 |
+| 언어 | 한국어 / 영어 (기기 언어 자동 감지) |
+| 공휴일 국가 | 한국, 미국, 일본, 영국, 독일, 프랑스, 호주, 캐나다, 중국 |
+| 알람 신뢰도 | 배터리 최적화 제외 설정 바로가기 (Android) |
+| 오픈소스 라이선스 | 앱에서 사용한 라이브러리 목록 |
+
+---
+
+## Android 잠금화면 알람 동작
+
+화면이 꺼진 잠금화면 상태에서도 알람이 전체화면으로 자동 표시됩니다.
+
+```
+AlarmManager (정확한 시각)
+  └── fullScreenIntent → 잠금화면 위 전체화면 알람 표시
+        ├── 알람 해제 버튼
+        ├── 스누즈 버튼
+        └── 강제 해제 모드: 수학 문제 풀기
+```
+
+**앱 종료 상태에서도 알람이 울립니다.** Android 백그라운드 태스크(alarm-task)가 AlarmManager 발동을 수신해 앱을 깨웁니다.
+
+### 필수 권한 (최초 실행 시 자동 안내)
+
+| 권한 | 용도 |
+|------|------|
+| 알람 및 리마인더 | 정확한 시각에 알람 발동 (Android 12+) |
+| 전체화면 인텐트 | 잠금화면 위 전체화면 표시 (Android 14+) |
+| 배터리 최적화 제외 | 절전 모드에서도 알람 발동 |
+
+---
+
+## 공휴일 지원 국가
+
+| 코드 | 국가 |
+|------|------|
+| KR | 대한민국 |
+| US | 미국 |
+| JP | 일본 |
+| GB | 영국 |
+| DE | 독일 |
+| FR | 프랑스 |
+| AU | 호주 |
+| CA | 캐나다 |
+| CN | 중국 |
+
+공휴일 데이터는 Google Calendar API를 사용하며, 최초 조회 후 1년간 기기에 캐싱됩니다. API 호출 실패 시 만료된 캐시를 fallback으로 사용합니다.
+
+---
+
+## 개발 환경
+
+### 요구사항
+- Node.js 18+
+- Android Studio (로컬 빌드 시)
+- EAS CLI (`npm install -g eas-cli`)
+
+### 환경 변수
+
+`.env` 파일을 프로젝트 루트에 생성합니다.
+
+```
+EXPO_PUBLIC_GOOGLE_CALENDAR_API_KEY=your_google_calendar_api_key
+```
+
+공휴일 제외 기능을 사용하지 않는다면 설정하지 않아도 됩니다.
+
+### 빌드 명령어
+
+```bash
+# 의존성 설치
+npm install
+
+# 개발 서버 (Expo Go — 알람 기능 미지원)
+npx expo start
+
+# 로컬 Development Build (알람 기능 포함)
+npx expo run:android
+
+# 로컬 Release Build
+npx expo run:android --variant release
+
+# EAS 클라우드 빌드 (preview)
+eas build --platform android --profile preview
+
+# 오픈소스 라이선스 파일 재생성
+npm run generate-licenses
+```
+
+> **주의**: `@notifee/react-native`는 Expo Go를 지원하지 않습니다. 알람 기능 테스트는 반드시 `npx expo run:android` 또는 EAS Build 결과물에서 진행해야 합니다.
+
+---
 
 ## 기술 스택
 
 | 역할 | 라이브러리 |
 |------|-----------|
 | 프레임워크 | Expo SDK 54, React Native 0.81.5 |
-| 네비게이션 | Expo Router v6 (파일 기반 라우팅) |
+| 네비게이션 | Expo Router v6 |
 | 상태 관리 | Zustand + AsyncStorage |
-| 알림/알람 트리거 | @notifee/react-native (Android), expo-notifications (iOS) |
-| 오디오 | expo-av + AlarmAudioModule (커스텀 네이티브 모듈) |
-| 파일 시스템 | expo-file-system (OOP API) |
+| 알림/알람 (Android) | @notifee/react-native |
+| 알림/알람 (iOS) | expo-notifications |
+| 오디오 | expo-av + AlarmAudioModule (네이티브) |
+| 파일 시스템 | expo-file-system |
 | 파일 선택 | expo-document-picker |
-| i18n | i18next + react-i18next + expo-localization |
-| 날짜 처리 | date-fns |
+| i18n | i18next + react-i18next |
 | 공휴일 | Google Calendar API |
 | 배터리 | expo-battery |
 
-## 주요 명령어
+---
 
-```bash
-# 의존성 설치
-npm install
+## 구현 단계 이력
 
-# 개발 서버 시작
-npx expo start
-
-# Android 빌드 및 실행 (알람 기능 테스트는 이 방법 필요)
-npx expo run:android
-
-# iOS 빌드 및 실행
-npx expo run:ios
-
-# 린트 검사
-npx expo lint
-```
-
-> **중요**: 알람 정확도 테스트는 Expo Go가 아닌 `npx expo run:android` 또는 EAS Build를 통한 실제 빌드에서 진행해야 합니다. @notifee/react-native는 Expo Go를 지원하지 않습니다.
-
-## 앱 구조
-
-```
-app/
-  _layout.tsx          # 루트 레이아웃 — ThemeProvider, 알림 리스너, 권한 요청
-  alarm-ringing.tsx    # 알람 울림 전체화면 오버레이
-  (tabs)/
-    index.tsx          # 알람 목록 화면
-    timer.tsx          # 타이머 화면 (일반 / 운동)
-    settings.tsx       # 설정 화면
-  alarm/
-    [id].tsx           # 알람 추가 / 편집 화면
-
-src/
-  store/
-    alarm-store.ts     # 알람 CRUD (Zustand + AsyncStorage)
-    settings-store.ts  # 앱 설정 (테마 / 언어 / 공휴일 국가)
-    timer-store.ts     # 운동 타이머 슬롯 관리
-    sound-store.ts     # 커스텀 알람음 관리 (파일 복사 + AsyncStorage)
-  tasks/
-    alarm-task.ts      # notifee onBackgroundEvent — 요일 반복 재등록 + 백그라운드 알람 해제
-  utils/
-    notification.ts          # expo-notifications 알람 스케줄 (iOS + fallback)
-    notification-notifee.ts  # notifee 채널 생성 + 알람 스케줄 + 예정 알림 (Android)
-    notification-android.ts  # notifee fullScreenIntent 알림 발송 유틸
-    battery-optimization.ts  # 배터리 최적화 제외 요청 (Android)
-    alarm-permissions.ts     # SCHEDULE_EXACT_ALARM / USE_FULL_SCREEN_INTENT 권한
-    holiday.ts               # Google Calendar API 공휴일 + AsyncStorage 캐싱
-    pick-sound.ts            # expo-document-picker 오디오 파일 선택
-  types/
-    alarm.ts           # Alarm 인터페이스
-    settings.ts        # AppSettings + SUPPORTED_COUNTRIES
-
-plugins/
-  withFullScreenIntent.js  # Expo Config Plugin — Android 잠금화면 알람 지원
-
-android/app/src/main/java/com/customalarm/app/
-  MainActivity.kt        # onNewIntent 라우팅 (잠금화면 플래그는 런타임 제어)
-  AlarmAudioModule.kt    # STREAM_ALARM 재생, moveToBackground, setLockScreenFlags 네이티브 모듈
-  AlarmAudioPackage.kt   # AlarmAudioModule RN 등록 패키지
-
-assets/sounds/
-  alarm_default.mp3  # 기본 알람음 (soundId: 'default')
-  alarm_bell.mp3     # 벨 알람음 (soundId: 'bell')
-  alarm_digital.mp3  # 디지털 알람음 (soundId: 'digital')
-  alarm_soft.mp3     # 부드러운 알람음 (soundId: 'gentle')
-```
-
-## 알람 데이터 모델
-
-```typescript
-interface Alarm {
-  id: string;
-  name: string;                        // 최대 20자
-  hour: number;                        // 0–23
-  minute: number;                      // 0–59
-  isEnabled: boolean;
-  scheduleType: 'weekly' | 'calendar';
-  weekdays?: number[];                 // 0=일, 1=월 … 6=토
-  calendarDates?: string[];            // ISO date strings
-  excludeHolidays: boolean;
-  soundId: string;                     // 'default'|'bell'|'digital'|'gentle'|'custom:{id}'
-  volume: number;                      // 0–100
-  vibration: boolean;
-  snooze: {
-    enabled: boolean;
-    intervalMinutes: number;           // 1/3/5/10/15/30
-    maxCount: number;                  // -1 = 무제한
-    enforced: boolean;                 // true 시 수학 문제 풀기 후 해제
-  };
-  background: {
-    type: 'color' | 'image';
-    value: string;                     // hex color 또는 image URI
-  };
-}
-```
-
-## 내장 알람음 soundId 규칙
-
-| soundId | 파일 | 설명 |
-|---------|------|------|
-| `default` | alarm_default.mp3 | 기본 알람음 |
-| `bell` | alarm_bell.mp3 | 벨 |
-| `digital` | alarm_digital.mp3 | 디지털 |
-| `gentle` | alarm_soft.mp3 | 부드러운 알람음 |
-| `custom:{id}` | document/sounds/{id}.ext | 사용자 추가 파일 |
-
-## Android 알람 신뢰도 구조
-
-```
-AlarmManager (notifee TriggerType.TIMESTAMP)
-  └── fullScreenAction → MainActivity.onNewIntent()
-        └── alarm-ringing.tsx 전체화면 표시
-              ├── AlarmAudio.setLockScreenFlags(true)   ← 알람 진입 시 런타임 설정
-              └── AlarmAudio.setLockScreenFlags(false)  ← 해제/스누즈 시 런타임 초기화
-```
-
-- **앱 종료 상태**: `getInitialNotification()` → alarmId 추출 → alarm-ringing 라우팅
-- **백그라운드 상태**: `onForegroundEvent(DELIVERED)` → alarm-ringing 라우팅
-- **포그라운드 복귀**: `getDisplayedNotifications()` (1순위) → `pending_alarm_id` AsyncStorage (2순위)
-
-### 잠금화면 플래그 런타임 제어
-
-`android:showWhenLocked` / `android:turnScreenOn`을 매니페스트에 고정하면 일반 알림(타이머 알림 등) 수신 후에도 앱이 잠금화면 위에 표시되는 버그가 발생합니다.
-이를 방지하기 위해 **alarm-ringing 화면 진입/해제 시점에만** `AlarmAudio.setLockScreenFlags()`로 런타임 제어합니다.
-
-| 시점 | 호출 | 효과 |
-|------|------|------|
-| alarm-ringing 마운트 | `setLockScreenFlags(true)` | 잠금화면 위에 알람 표시 |
-| 알람 해제 / 스누즈 | `setLockScreenFlags(false)` | 이후 화면 켜기 시 일반 잠금화면 복원 |
-
-## Android 필수 권한
-
-| 권한 | 용도 | Android 버전 |
-|------|------|-------------|
-| SCHEDULE_EXACT_ALARM | 정확한 시각 알람 | 12+ |
-| USE_FULL_SCREEN_INTENT | 잠금화면 전체화면 표시 | 14+ |
-| FOREGROUND_SERVICE | fullScreenIntent 동작 | 전체 |
-| REQUEST_IGNORE_BATTERY_OPTIMIZATIONS | 배터리 최적화 제외 | 전체 |
-
-권한은 앱 최초 실행 시 자동으로 안내됩니다.
-
-## 환경 변수
-
-```
-EXPO_PUBLIC_GOOGLE_CALENDAR_API_KEY=...  # 공휴일 API (선택)
-```
-
-`.env` 파일로 관리하며 소스코드에 직접 노출하지 않습니다.
-
-## 알람 예정 알림 (30분 전)
-
-알람 발동 30분 전에 조용한 알림을 표시합니다. 알림에는 **'지금 해제'** 액션 버튼이 포함되어 있어, 앱을 열지 않고 바로 해당 알람을 취소할 수 있습니다.
-
-| 알람 종류 | '지금 해제' 동작 |
-|---|---|
-| 일회성 알람 | 알람 비활성화 (`isEnabled: false`) |
-| 요일 반복 알람 | 이번 주 해당 회차만 건너뜀, **다음 주는 정상 동작** |
-| 캘린더 알람 | 해당 날짜만 취소, **다른 날짜는 정상 동작** |
-
-- Android (notifee) 전용 기능입니다.
-- 알림 채널: `alarm_upcoming` (무음, 진동 없음, 방해금지 모드 준수)
-
-## 구현 단계
-
-| Phase | 내용 | 상태 |
-|-------|------|------|
-| Phase 1 | 알람 목록/추가(요일제)/ON-OFF, 일반 타이머, 설정(다크모드+언어) | 완료 |
-| Phase 2 | 캘린더제, 공휴일 제외, 알람음, 진동, 스누즈, 운동 타이머 | 완료 |
-| Phase 3 | 알람 배경, 스누즈 강화(수학문제), 전체화면 알람 오버레이 | 완료 |
-| Phase 4 | Android 알람 신뢰도 강화 (fullScreenIntent, WakeLock, 커스텀 알람음) | 완료 |
-| Phase 4 버그수정 | 알람 화면 중복 표시, 화면 미기동, 커스텀 알람음 저장 버그 수정 | 완료 |
-| Phase 5 | 타이머 배터리 경고, 예정 알람 알림(30분 전 + 지금 해제) | 완료 |
-| 버그수정 (Phase 5 후) | STREAM_ALARM 적용(진동모드 알람음), 잠금화면 플래그 런타임 제어(타이머 알림 후 화면 켜기 버그) | 완료 |
+| Phase | 주요 내용 |
+|-------|---------|
+| Phase 1 | 알람 목록/추가(요일제)/ON-OFF, 일반 타이머, 설정(다크모드+언어) |
+| Phase 2 | 캘린더제, 공휴일 제외, 알람음, 진동, 스누즈, 운동 타이머 |
+| Phase 3 | 알람 배경, 스누즈 강화(수학문제), 전체화면 알람 오버레이 |
+| Phase 4 | Android 알람 신뢰도 강화 (fullScreenIntent, WakeLock, 커스텀 알람음) |
+| Phase 5 | 타이머 배터리 경고, 예정 알람 알림(30분 전 + '지금 해제') |
+| Phase 6 | 주말 제외, 캘린더 반복 주기, 반복 일자 제외, 공휴일 카드 UI 반영 |
