@@ -342,15 +342,18 @@ export default function AlarmEditScreen() {
 
   const base = existing ?? DEFAULT_ALARM;
 
-  // 상태
-  const [hour, setHour] = useState(base.hour);
-  const [minute, setMinute] = useState(base.minute);
+  // 신규 알람이면 현재 시각을, 편집이면 저장된 시각을 초기값으로 사용
+  const nowForInit = isNew ? new Date() : null;
+  const [hour, setHour] = useState(nowForInit ? nowForInit.getHours() : base.hour);
+  const [minute, setMinute] = useState(nowForInit ? nowForInit.getMinutes() : base.minute);
   const [name, setName] = useState(base.name);
   const [scheduleType, setScheduleType] = useState<'weekly' | 'calendar'>(base.scheduleType);
   const [weekdays, setWeekdays] = useState<number[]>(base.weekdays);
   const [calendarDates, setCalendarDates] = useState<string[]>(base.calendarDates);
   const [repeatEvery, setRepeatEvery] = useState(base.repeatEvery ?? null);
   const [excludeHolidays, setExcludeHolidays] = useState(base.excludeHolidays);
+  const [excludeWeekends, setExcludeWeekends] = useState(base.excludeWeekends ?? false);
+  const [excludeRepeatDates, setExcludeRepeatDates] = useState(base.excludeRepeatDates ?? false);
   const [soundId, setSoundId] = useState(base.soundId);
   const [volume, setVolume] = useState(base.volume);
   const [vibration, setVibration] = useState(base.vibration);
@@ -414,6 +417,8 @@ export default function AlarmEditScreen() {
       calendarDates,
       repeatEvery: repeatEvery ?? undefined,
       excludeHolidays,
+      excludeWeekends,
+      excludeRepeatDates,
       soundId,
       volume,
       vibration,
@@ -605,6 +610,36 @@ export default function AlarmEditScreen() {
             thumbColor={colors.switchThumb}
           />
         </View>
+
+        {/* 주말 제외 */}
+        <View style={[styles.rowCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.rowTitle, { color: colors.text }]}>{t('alarmEdit.excludeWeekends')}</Text>
+            <Text style={[styles.rowDesc, { color: colors.subText }]}>{t('alarmEdit.excludeWeekendsDesc')}</Text>
+          </View>
+          <Switch
+            value={excludeWeekends}
+            onValueChange={setExcludeWeekends}
+            trackColor={{ false: colors.border, true: colors.switchTrackOn }}
+            thumbColor={colors.switchThumb}
+          />
+        </View>
+
+        {/* 반복 일자 제외 (캘린더 모드 + 반복 주기 선택 시에만 표시) */}
+        {scheduleType === 'calendar' && repeatEvery !== null && (
+          <View style={[styles.rowCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.rowTitle, { color: colors.text }]}>{t('alarmEdit.excludeRepeatDates')}</Text>
+              <Text style={[styles.rowDesc, { color: colors.subText }]}>{t('alarmEdit.excludeRepeatDatesDesc')}</Text>
+            </View>
+            <Switch
+              value={excludeRepeatDates}
+              onValueChange={setExcludeRepeatDates}
+              trackColor={{ false: colors.border, true: colors.switchTrackOn }}
+              thumbColor={colors.switchThumb}
+            />
+          </View>
+        )}
 
         {/* 알람음 선택 */}
         <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>

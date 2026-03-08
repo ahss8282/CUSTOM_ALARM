@@ -64,10 +64,16 @@ export default function AlarmRingingScreen() {
     return () => clearInterval(id);
   }, []);
 
-  /* ── 화면 켜기 (expo-keep-awake): 알람 울림 중 화면이 꺼지지 않도록 ── */
+  /* ── 화면 켜기 + 잠금화면 위 표시 플래그 ── */
   useEffect(() => {
     activateKeepAwakeAsync('alarm-ringing');
-    return () => { deactivateKeepAwake('alarm-ringing'); };
+    // Android: 잠금화면 위에 알람 화면을 즉시 표시하기 위해 플래그 설정
+    // (setShowWhenLocked + setTurnScreenOn — AlarmAudioModule 브릿지 경유)
+    setLockScreenFlags(true);
+    return () => {
+      deactivateKeepAwake('alarm-ringing');
+      setLockScreenFlags(false);
+    };
   }, []);
 
   /* ── soundId에 따른 오디오 소스 결정 ── */

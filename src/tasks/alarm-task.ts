@@ -160,25 +160,12 @@ if (!isExpoGo && Platform.OS === 'android') {
       const alarms: any[] = raw ? JSON.parse(raw) : [];
       const alarm = alarms.find((a) => a.id === alarmId);
 
-      // 비활성화된 알람이거나 요일 반복이 없으면 재등록 불필요
-      if (!alarm || !alarm.isEnabled || !alarm.weekdays?.length) return;
+      if (!alarm || !alarm.isEnabled) return;
 
-      /**
-       * 요일 반복 알람: 발동한 요일의 다음 주 발동 시각으로 재등록합니다.
-       * ID 패턴: `{alarmId}_w{weekday}` (예: "abc123_w1" = 월요일)
-       */
-      const notifId = detail.notification?.id ?? '';
-      const match = notifId.match(/_w(\d+)$/);
-      if (!match) return;
+      const firedNotifId = detail.notification?.id ?? '';
 
-      const firedWeekday = parseInt(match[1]);
-
-      const now = new Date();
-      const next = new Date();
-      next.setHours(alarm.hour, alarm.minute, 0, 0);
-      next.setDate(now.getDate() + 7);
-
-      const { setupNotifeeChannel } = await import('../utils/notification-notifee');
+      const { setupNotifeeChannel, rescheduleWeekdayOccurrence } =
+        await import('../utils/notification-notifee');
       const {
         TriggerType,
         AndroidImportance,
@@ -190,28 +177,107 @@ if (!isExpoGo && Platform.OS === 'android') {
       const hh = String(alarm.hour).padStart(2, '0');
       const mm = String(alarm.minute).padStart(2, '0');
 
-      await notifee.createTriggerNotification(
-        {
-          id: `${alarmId}_w${firedWeekday}`,
-          title: alarm.name || '알람',
-          body: `${hh}:${mm}`,
-          data: { alarmId },
-          android: {
-            channelId,
-            category: AndroidCategory.ALARM,
-            fullScreenAction: { id: 'alarm_fullscreen', launchActivity: 'default' },
-            importance: AndroidImportance.HIGH,
-            visibility: AndroidVisibility.PUBLIC,
-            pressAction: { id: 'default', launchActivity: 'default' },
-            bypassDnd: true,
-          },
+      const baseNotif = {
+        title: alarm.name || '알람',
+        body: `${hh}:${mm}`,
+        data: { alarmId },
+        android: {
+          channelId,
+          category: AndroidCategory.ALARM,
+          fullScreenAction: { id: 'alarm_fullscreen', launchActivity: 'default' },
+          importance: AndroidImportance.HIGH,
+          visibility: AndroidVisibility.PUBLIC,
+          pressAction: { id: 'default', launchActivity: 'default' },
+          bypassDnd: true,
         },
-        {
-          type: TriggerType.TIMESTAMP,
-          timestamp: next.getTime(),
-          alarmManager: { allowWhileIdle: true },
+      };
+      const alarmManagerOpts = { allowWhileIdle: true };
+
+      /**
+       * 요일 반복 알람 (_w{weekday}):
+       * 발동 후 다음 유효 날짜로 재등록합니다.
+       * excludeHolidays/excludeWeekends가 있으면 rescheduleWeekdayOccurrence가 처리합니다.
+       */
+      const weekdayMatch = firedNotifId.match(/_w(\d+)$/);
+      if (weekdayMatch && alarm.weekdays?.length) {
+        const firedWeekday = parseInt(weekdayMatch[1]);
+        if (alarm.excludeHolidays || alarm.excludeWeekends) {
+          // 제외 조건 있음: rescheduleWeekdayOccurrence가 유효한 다음 날짜를 계산해 등록
+          await rescheduleWeekdayOccurrence(alarm, firedWeekday);
+        } else {
+          // 제외 조건 없음: 기존 로직 (정확히 7일 후)
+          const now = new Date();
+          const next = new Date();
+          next.setHours(alarm.hour, alarm.minute, 0, 0);
+          next.setDate(now.getDate() + 7);
+          await notifee.createTriggerNotification(
+            { ...baseNotif, id: `${alarmId}_w${firedWeekday}` },
+            { type: TriggerType.TIMESTAMP, timestamp: next.getTime(), alarmManager: alarmManagerOpts }
+          );
         }
-      );
+        return;
+      }
+
+      /**
+       * 캘린더 반복 주기 알람 (_rep_{date}):
+       * repeatEvery 주기만큼 다음 날짜를 계산해 `_rep_` ID로 재등록합니다.
+       */
+      const repMatch = firedNotifId.match(/_rep_(\d{4}-\d{2}-\d{2})$/);
+      if (repMatch && alarm.repeatEvery) {
+        const firedDateStr = repMatch[1];
+        const { parseLocalDate, toLocalDateString } = await import('../utils/date-utils');
+        const firedDate = parseLocalDate(firedDateStr);
+        const { getHolidays } = await import('../utils/holiday');
+        const holidayCountry =
+          (await AsyncStorage.getItem('holidayCountry')) ?? 'KR';
+        const holidaySet = await getHolidays(holidayCountry, new Date().getFullYear());
+
+        // repeatEvery 주기로 다음 날짜 계산 (최대 52회 탐색해 유효한 날짜 찾기)
+        let candidate = new Date(firedDate);
+        const now = new Date();
+        for (let i = 0; i < 52; i++) {
+          if (alarm.repeatEvery.unit === 'week') {
+            candidate.setDate(candidate.getDate() + 7 * alarm.repeatEvery.value);
+          } else {
+            candidate.setMonth(candidate.getMonth() + alarm.repeatEvery.value);
+          }
+          candidate.setHours(alarm.hour, alarm.minute, 0, 0);
+          if (candidate <= now) continue;
+          const dateStr = toLocalDateString(candidate);
+          const day = candidate.getDay();
+          const skip =
+            (alarm.excludeHolidays && holidaySet.has(dateStr)) ||
+            (alarm.excludeWeekends && (day === 0 || day === 6));
+          if (!skip) {
+            await notifee.createTriggerNotification(
+              { ...baseNotif, id: `${alarmId}_rep_${dateStr}` },
+              { type: TriggerType.TIMESTAMP, timestamp: candidate.getTime(), alarmManager: alarmManagerOpts }
+            );
+            break;
+          }
+        }
+        return;
+      }
+
+      /**
+       * 반복 일자 제외 알람 (_excl_{date}):
+       * 기존 _excl_ 트리거를 모두 취소한 뒤 scheduleAlarmWithNotifee를 재호출해
+       * 다음 유효 날짜들을 새로 등록합니다.
+       */
+      const exclMatch = firedNotifId.match(/_excl_(\d{4}-\d{2}-\d{2})$/);
+      if (exclMatch) {
+        // 기존에 예약된 _excl_ 트리거들을 모두 취소하고 재등록
+        const triggers = await notifee.getTriggerNotifications();
+        const exclIds = triggers
+          .filter((n: any) => n.notification.id?.startsWith(`${alarmId}_excl_`))
+          .map((n: any) => n.notification.id as string);
+        await Promise.all(exclIds.map((id: string) => notifee.cancelTriggerNotification(id)));
+        const { scheduleAlarmWithNotifee: reschedule } = await import('../utils/notification-notifee');
+        await reschedule(alarm);
+        return;
+      }
+
+      // _once, _d{date} 등 나머지 패턴: 재등록 불필요 (일회성 또는 이미 개별 등록됨)
     } catch (e) {
       console.warn('[AlarmTask] 재등록 실패:', e);
     }

@@ -1,6 +1,7 @@
 import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Alarm } from '../types/alarm';
 import {
   canUseNotifee,
@@ -10,6 +11,7 @@ import {
   setupNotifeeChannel,
   scheduleUpcomingNotifications,
 } from './notification-notifee';
+import { getHolidays } from './holiday';
 
 const isExpoGo = Constants.executionEnvironment === 'storeClient';
 
@@ -108,18 +110,36 @@ export const scheduleAlarmNotification = async (alarm: Alarm): Promise<void> => 
       }
     }
   } else {
+    // iOS/fallback: calendar 모드
+    // excludeHolidays/excludeWeekends 최선 노력으로 적용 (반복 주기 재등록은 미지원)
     const now = new Date();
+    const hasExclusion = alarm.excludeHolidays || alarm.excludeWeekends;
+    let holidaySet = new Set<string>();
+    if (hasExclusion) {
+      try {
+        const holidayCountry = (await AsyncStorage.getItem('holidayCountry')) ?? 'KR';
+        holidaySet = await getHolidays(holidayCountry, new Date().getFullYear());
+      } catch {
+        // 공휴일 API 실패 시 빈 Set으로 진행
+      }
+    }
+
     for (const dateStr of alarm.calendarDates) {
       const trigger = new Date(
         `${dateStr}T${String(alarm.hour).padStart(2, '0')}:${String(alarm.minute).padStart(2, '0')}:00`
       );
-      if (trigger > now) {
-        await Notifications.scheduleNotificationAsync({
-          identifier: `${alarm.id}_d${dateStr}`,
-          content,
-          trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: trigger },
-        });
-      }
+      if (trigger <= now) continue;
+      // 주말 제외 (0=일, 6=토)
+      const day = trigger.getDay();
+      if (alarm.excludeWeekends && (day === 0 || day === 6)) continue;
+      // 공휴일 제외
+      if (alarm.excludeHolidays && holidaySet.has(dateStr)) continue;
+
+      await Notifications.scheduleNotificationAsync({
+        identifier: `${alarm.id}_d${dateStr}`,
+        content,
+        trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: trigger },
+      });
     }
   }
 };

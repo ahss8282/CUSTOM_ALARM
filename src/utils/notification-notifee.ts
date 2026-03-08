@@ -12,7 +12,10 @@
  */
 import { Platform, NativeModules } from 'react-native';
 import Constants from 'expo-constants';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { Alarm } from '../types/alarm';
+import { getHolidays } from './holiday';
+import { toLocalDateString, parseLocalDate } from './date-utils';
 
 const isExpoGo = Constants.executionEnvironment === 'storeClient';
 
@@ -76,6 +79,118 @@ export const setupNotifeeChannel = async (): Promise<string> => {
   return NOTIFEE_CHANNEL_ID;
 };
 
+/* ─── 공휴일 Set 가져오기 헬퍼 ─── */
+async function fetchHolidaySet(): Promise<Set<string>> {
+  const holidayCountry = (await AsyncStorage.getItem('holidayCountry')) ?? 'KR';
+  const year = new Date().getFullYear();
+  return getHolidays(holidayCountry, year);
+}
+
+/* ─── 주말 여부 확인 ─── */
+function isWeekend(date: Date): boolean {
+  const day = date.getDay();
+  return day === 0 || day === 6;
+}
+
+/**
+ * startDate에서 시작해 repeatEvery 주기로 count개의 날짜(YYYY-MM-DD)를 Set으로 반환합니다.
+ * 캘린더 반복 주기 날짜 집합을 구성할 때 사용합니다.
+ */
+function generateRepeatDateSet(
+  startDate: Date,
+  repeatEvery: { value: number; unit: 'week' | 'month' },
+  count: number
+): Set<string> {
+  const result = new Set<string>();
+  let current = new Date(startDate);
+  for (let i = 0; i < count; i++) {
+    result.add(toLocalDateString(current));
+    if (repeatEvery.unit === 'week') {
+      current = new Date(current);
+      current.setDate(current.getDate() + 7 * repeatEvery.value);
+    } else {
+      current = new Date(current);
+      current.setMonth(current.getMonth() + repeatEvery.value);
+    }
+  }
+  return result;
+}
+
+/**
+ * 특정 요일(weekday)에서 excludeHolidays/excludeWeekends 조건을 충족하는
+ * afterDate 이후 첫 번째 유효한 날짜를 반환합니다.
+ * 해당 요일이 항상 제외 조건에 해당하면 null을 반환합니다. (예: 주말 제외인데 토요일 알람)
+ */
+async function getNextValidWeekdayDate(
+  alarm: Alarm,
+  weekday: number,
+  afterDate: Date,
+  holidays: Set<string>
+): Promise<Date | null> {
+  // 해당 요일이 항상 주말인데 주말 제외이면 즉시 null
+  if (alarm.excludeWeekends && (weekday === 0 || weekday === 6)) return null;
+
+  let candidate = new Date(afterDate);
+  candidate.setHours(alarm.hour, alarm.minute, 0, 0);
+  // afterDate 이후로 candidate를 이동
+  if (candidate <= afterDate) candidate.setDate(candidate.getDate() + 1);
+
+  // 최대 52주 * 7일 = 364일 탐색
+  for (let i = 0; i < 52 * 7; i++) {
+    if (candidate.getDay() === weekday) {
+      const dateStr = toLocalDateString(candidate);
+      const skip =
+        (alarm.excludeWeekends && isWeekend(candidate)) ||
+        (alarm.excludeHolidays && holidays.has(dateStr));
+      if (!skip) return candidate;
+    }
+    candidate = new Date(candidate);
+    candidate.setDate(candidate.getDate() + 1);
+  }
+  return null;
+}
+
+/**
+ * excludeRepeatDates=true일 때, 모든 calendarDates의 반복 주기 날짜 집합에
+ * 포함되지 않는 날 중 공휴일/주말 제외 조건을 충족하는
+ * afterDate 이후 첫 번째 유효한 날짜를 반환합니다.
+ *
+ * 예: calendarDates=['2026-02-27(금)', '2026-03-01(일)'], repeatEvery=2주
+ *   → 반복 날짜 집합: {2/27, 3/1, 3/13, 3/15, 3/27, 3/29, ...}
+ *   → 반환: 2/28, 3/2, 3/3, 3/4, ... (반복 날짜만 건너뜀)
+ */
+async function getNextExcludeRepeatDate(
+  alarm: Alarm,
+  afterDate: Date,
+  holidays: Set<string>
+): Promise<Date | null> {
+  if (!alarm.repeatEvery || !alarm.calendarDates?.length) return null;
+
+  // 모든 calendarDates에서 반복 날짜 집합 통합 구성 (향후 200회씩)
+  const allRepeatDates = new Set<string>();
+  for (const cDateStr of alarm.calendarDates) {
+    const cDate = parseLocalDate(cDateStr);
+    const dates = generateRepeatDateSet(cDate, alarm.repeatEvery, 200);
+    for (const d of dates) allRepeatDates.add(d);
+  }
+
+  let candidate = new Date(afterDate);
+  candidate.setHours(alarm.hour, alarm.minute, 0, 0);
+  if (candidate <= afterDate) candidate.setDate(candidate.getDate() + 1);
+
+  // 최대 1년(365일) 탐색
+  for (let i = 0; i < 365; i++) {
+    const dateStr = toLocalDateString(candidate);
+    const isRepeat = allRepeatDates.has(dateStr);
+    const isHoliday = alarm.excludeHolidays && holidays.has(dateStr);
+    const isWknd = alarm.excludeWeekends && isWeekend(candidate);
+    if (!isRepeat && !isHoliday && !isWknd) return candidate;
+    candidate = new Date(candidate);
+    candidate.setDate(candidate.getDate() + 1);
+  }
+  return null;
+}
+
 /* ─── 다음 특정 요일 발동 시각 계산 ─── */
 function getNextWeekdayTimestamp(hour: number, minute: number, weekday: number): number {
   // weekday: 0=일, 1=월 ... 6=토
@@ -134,6 +249,8 @@ export const scheduleAlarmWithNotifee = async (alarm: Alarm): Promise<void> => {
     /** AlarmManager 설정: Doze 모드에서도 동작하는 정확한 알람 */
     const alarmManagerOpts = { allowWhileIdle: true };
 
+    const hasExclusion = alarm.excludeHolidays || alarm.excludeWeekends;
+
     if (alarm.scheduleType === 'weekly') {
       if (alarm.weekdays.length === 0) {
         // 한 번만 알람
@@ -146,8 +263,8 @@ export const scheduleAlarmWithNotifee = async (alarm: Alarm): Promise<void> => {
           { ...baseNotif, id: `${alarm.id}_once` },
           { type: TriggerType.TIMESTAMP, timestamp: target.getTime(), alarmManager: alarmManagerOpts }
         );
-      } else {
-        // 요일 반복: 각 요일의 다음 발동 시각을 개별 등록
+      } else if (!hasExclusion) {
+        // 요일 반복 (제외 조건 없음): 기존 WEEKLY 방식으로 개별 등록
         for (const weekday of alarm.weekdays) {
           const timestamp = getNextWeekdayTimestamp(alarm.hour, alarm.minute, weekday);
           await notifee.createTriggerNotification(
@@ -155,13 +272,70 @@ export const scheduleAlarmWithNotifee = async (alarm: Alarm): Promise<void> => {
             { type: TriggerType.TIMESTAMP, timestamp, alarmManager: alarmManagerOpts }
           );
         }
+      } else {
+        // 요일 반복 + 제외 조건 있음: 유효한 다음 날짜를 계산해 TIMESTAMP 등록
+        const holidaySet = await fetchHolidaySet();
+        const now = new Date();
+        for (const weekday of alarm.weekdays) {
+          const nextDate = await getNextValidWeekdayDate(alarm, weekday, now, holidaySet);
+          if (!nextDate) continue; // 이 요일은 항상 제외 조건에 해당 (예: 주말 제외인데 토요일)
+          await notifee.createTriggerNotification(
+            { ...baseNotif, id: `${alarm.id}_w${weekday}` },
+            { type: TriggerType.TIMESTAMP, timestamp: nextDate.getTime(), alarmManager: alarmManagerOpts }
+          );
+        }
       }
     } else {
       // calendar 모드
       const now = new Date();
-      for (const dateStr of alarm.calendarDates) {
-        const trigger = new Date(`${dateStr}T${hh}:${mm}:00`);
-        if (trigger > now) {
+
+      if (alarm.repeatEvery && !alarm.excludeRepeatDates) {
+        // 캘린더 + 반복 주기 있음 + 반복 일자 제외 아님:
+        // 각 calendarDate에서 반복 주기로 향후 12회의 날짜를 생성해 등록
+        const holidaySet = hasExclusion ? await fetchHolidaySet() : new Set<string>();
+        for (const baseStr of alarm.calendarDates) {
+          const baseDate = parseLocalDate(baseStr);
+          const repeatDates = generateRepeatDateSet(baseDate, alarm.repeatEvery, 12);
+          for (const dateStr of repeatDates) {
+            const trigger = new Date(`${dateStr}T${hh}:${mm}:00`);
+            if (trigger <= now) continue;
+            // 공휴일/주말 필터
+            const skip =
+              (alarm.excludeHolidays && holidaySet.has(dateStr)) ||
+              (alarm.excludeWeekends && isWeekend(trigger));
+            if (skip) continue;
+            await notifee.createTriggerNotification(
+              { ...baseNotif, id: `${alarm.id}_rep_${dateStr}` },
+              { type: TriggerType.TIMESTAMP, timestamp: trigger.getTime(), alarmManager: alarmManagerOpts }
+            );
+          }
+        }
+      } else if (alarm.repeatEvery && alarm.excludeRepeatDates) {
+        // 캘린더 + 반복 주기 있음 + 반복 일자 제외:
+        // 모든 calendarDates의 반복 날짜 집합을 통합 구성한 뒤,
+        // 그 집합에 포함되지 않는 날마다 알람 등록 (향후 12개)
+        const holidaySet = await fetchHolidaySet();
+        let pointer = now;
+        for (let i = 0; i < 12; i++) {
+          const nextDate = await getNextExcludeRepeatDate(alarm, pointer, holidaySet);
+          if (!nextDate) break;
+          const dateStr = toLocalDateString(nextDate);
+          await notifee.createTriggerNotification(
+            { ...baseNotif, id: `${alarm.id}_excl_${dateStr}` },
+            { type: TriggerType.TIMESTAMP, timestamp: nextDate.getTime(), alarmManager: alarmManagerOpts }
+          );
+          pointer = nextDate;
+        }
+      } else {
+        // 캘린더 + 반복 주기 없음: 각 calendarDate 그대로 등록 (공휴일/주말 필터 적용)
+        const holidaySet = hasExclusion ? await fetchHolidaySet() : new Set<string>();
+        for (const dateStr of alarm.calendarDates) {
+          const trigger = new Date(`${dateStr}T${hh}:${mm}:00`);
+          if (trigger <= now) continue;
+          const skip =
+            (alarm.excludeHolidays && holidaySet.has(dateStr)) ||
+            (alarm.excludeWeekends && isWeekend(trigger));
+          if (skip) continue;
           await notifee.createTriggerNotification(
             { ...baseNotif, id: `${alarm.id}_d${dateStr}` },
             { type: TriggerType.TIMESTAMP, timestamp: trigger.getTime(), alarmManager: alarmManagerOpts }
@@ -255,26 +429,101 @@ export async function scheduleUpcomingNotifications(alarm: Alarm): Promise<void>
       );
     };
 
+    const hasExclusion = alarm.excludeHolidays || alarm.excludeWeekends;
+    const upHolidaySet = hasExclusion && alarm.excludeHolidays
+      ? await fetchHolidaySet()
+      : new Set<string>();
+
     if (alarm.scheduleType === 'weekly') {
       if (alarm.weekdays.length === 0) {
-        // 한 번만 울리는 알람
+        // 한 번만 울리는 알람 — 주말/공휴일 제외 적용
         const target = new Date();
         target.setHours(alarm.hour, alarm.minute, 0, 0);
         if (target.getTime() <= now) target.setDate(target.getDate() + 1);
+        if (hasExclusion) {
+          for (let i = 0; i < 365; i++) {
+            const dateStr = toLocalDateString(target);
+            const skip =
+              (alarm.excludeWeekends && isWeekend(target)) ||
+              (alarm.excludeHolidays && upHolidaySet.has(dateStr));
+            if (!skip) break;
+            target.setDate(target.getDate() + 1);
+          }
+        }
         await scheduleOne(`${alarm.id}_up_once`, `${alarm.id}_once`, target.getTime());
       } else {
-        // 요일 반복 알람
+        // 요일 반복 알람 — exclusion 조건 반영
         for (const weekday of alarm.weekdays) {
-          const timestamp = getNextWeekdayTimestamp(alarm.hour, alarm.minute, weekday);
-          await scheduleOne(`${alarm.id}_up_w${weekday}`, `${alarm.id}_w${weekday}`, timestamp);
+          // 이 요일 자체가 항상 제외되는 경우 스킵 (주말 요일 + 주말 제외)
+          if (alarm.excludeWeekends && (weekday === 0 || weekday === 6)) continue;
+
+          if (hasExclusion) {
+            const nextDate = await getNextValidWeekdayDate(
+              alarm, weekday, new Date(), upHolidaySet
+            );
+            if (!nextDate) continue;
+            await scheduleOne(`${alarm.id}_up_w${weekday}`, `${alarm.id}_w${weekday}`, nextDate.getTime());
+          } else {
+            const timestamp = getNextWeekdayTimestamp(alarm.hour, alarm.minute, weekday);
+            await scheduleOne(`${alarm.id}_up_w${weekday}`, `${alarm.id}_w${weekday}`, timestamp);
+          }
         }
       }
     } else {
       // calendar 모드
-      for (const dateStr of alarm.calendarDates) {
-        const trigger = new Date(`${dateStr}T${hh}:${mm}:00`).getTime();
-        if (trigger > now) {
-          await scheduleOne(`${alarm.id}_up_d${dateStr}`, `${alarm.id}_d${dateStr}`, trigger);
+      const calHolidaySet = hasExclusion ? await fetchHolidaySet() : new Set<string>();
+
+      if (alarm.repeatEvery && alarm.excludeRepeatDates) {
+        // 반복 일자 제외 모드: 반복 날짜 집합을 제외한 첫 번째 날짜에 예정 알림 등록
+        const nextDate = await getNextExcludeRepeatDate(alarm, new Date(), calHolidaySet);
+        if (nextDate) {
+          const dateStr = toLocalDateString(nextDate);
+          await scheduleOne(
+            `${alarm.id}_up_excl_${dateStr}`,
+            `${alarm.id}_excl_${dateStr}`,
+            nextDate.getTime()
+          );
+        }
+      } else if (alarm.repeatEvery) {
+        // repeatEvery 있음 (제외 아님): 각 calendarDate에서 반복 날짜 중 가장 가까운 1개 예정 알림 등록
+        for (const baseStr of alarm.calendarDates) {
+          let cursor = parseLocalDate(baseStr);
+          const cutoff = new Date();
+          cutoff.setFullYear(cutoff.getFullYear() + 1);
+          let scheduled = false;
+          while (cursor <= cutoff && !scheduled) {
+            const dateStr = toLocalDateString(cursor);
+            const trigger = new Date(`${dateStr}T${hh}:${mm}:00`);
+            if (trigger.getTime() > now) {
+              const skip =
+                (alarm.excludeWeekends && isWeekend(trigger)) ||
+                (alarm.excludeHolidays && calHolidaySet.has(dateStr));
+              if (!skip) {
+                await scheduleOne(
+                  `${alarm.id}_up_rep_${dateStr}`,
+                  `${alarm.id}_rep_${dateStr}`,
+                  trigger.getTime()
+                );
+                scheduled = true;
+              }
+            }
+            if (alarm.repeatEvery.unit === 'week') {
+              cursor = new Date(cursor);
+              cursor.setDate(cursor.getDate() + 7 * alarm.repeatEvery.value);
+            } else {
+              cursor = new Date(cursor);
+              cursor.setMonth(cursor.getMonth() + alarm.repeatEvery.value);
+            }
+          }
+        }
+      } else {
+        // repeatEvery 없음: calendarDates 직접 등록
+        for (const dateStr of alarm.calendarDates) {
+          const trigger = new Date(`${dateStr}T${hh}:${mm}:00`);
+          if (trigger.getTime() <= now) continue;
+          if (alarm.excludeWeekends && isWeekend(trigger)) continue;
+          if (alarm.excludeHolidays && calHolidaySet.has(dateStr)) continue;
+          await scheduleOne(`${alarm.id}_up_d${dateStr}`, `${alarm.id}_d${dateStr}`, trigger.getTime());
         }
       }
     }
@@ -303,15 +552,25 @@ export async function rescheduleWeekdayOccurrence(alarm: Alarm, weekday: number)
     const hh = String(alarm.hour).padStart(2, '0');
     const mm = String(alarm.minute).padStart(2, '0');
     const now = Date.now();
+    const nowDate = new Date();
 
-    // 다음 주 해당 요일 발동 시각 계산
-    // (이번 주 회차를 방금 취소했으므로 무조건 +7일 기준으로 계산)
-    const next = new Date();
-    next.setHours(alarm.hour, alarm.minute, 0, 0);
-    const daysUntil = (weekday - next.getDay() + 7) % 7;
-    next.setDate(next.getDate() + (daysUntil === 0 ? 7 : daysUntil));
-    // 계산 결과가 여전히 과거라면(엣지케이스) 7일 추가
-    if (next.getTime() <= now) next.setDate(next.getDate() + 7);
+    let nextTimestamp: number;
+
+    if (alarm.excludeHolidays || alarm.excludeWeekends) {
+      // 제외 조건이 있으면 유효한 다음 날짜를 탐색해서 결정
+      const holidaySet = await fetchHolidaySet();
+      const nextDate = await getNextValidWeekdayDate(alarm, weekday, nowDate, holidaySet);
+      if (!nextDate) return; // 이 요일은 항상 제외 조건에 해당 (예: 주말 제외인데 토요일 알람)
+      nextTimestamp = nextDate.getTime();
+    } else {
+      // 제외 조건 없음: 기존 로직 (다음 주 해당 요일 고정 계산)
+      const next = new Date();
+      next.setHours(alarm.hour, alarm.minute, 0, 0);
+      const daysUntil = (weekday - next.getDay() + 7) % 7;
+      next.setDate(next.getDate() + (daysUntil === 0 ? 7 : daysUntil));
+      if (next.getTime() <= now) next.setDate(next.getDate() + 7);
+      nextTimestamp = next.getTime();
+    }
 
     const triggerNotifId = `${alarm.id}_w${weekday}`;
 
@@ -332,12 +591,12 @@ export async function rescheduleWeekdayOccurrence(alarm: Alarm, weekday: number)
           bypassDnd: true,
         },
       },
-      { type: TriggerType.TIMESTAMP, timestamp: next.getTime(), alarmManager: { allowWhileIdle: true } }
+      { type: TriggerType.TIMESTAMP, timestamp: nextTimestamp, alarmManager: { allowWhileIdle: true } }
     );
 
     // 예정 알림 재등록 (30분 전)
     const THIRTY_MIN_MS = 30 * 60 * 1000;
-    const upcomingTs = next.getTime() - THIRTY_MIN_MS;
+    const upcomingTs = nextTimestamp - THIRTY_MIN_MS;
     if (upcomingTs > now) {
       await notifee.createTriggerNotification(
         {

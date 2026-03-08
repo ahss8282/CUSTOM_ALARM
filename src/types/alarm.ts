@@ -18,8 +18,12 @@ export interface Alarm {
   calendarDates: string[];  // ISO date strings (calendar 모드)
   repeatEvery?: { value: number; unit: 'week' | 'month' }; // calendar 반복 주기
 
-  // 공휴일 제외
+  // 공휴일/주말 제외
   excludeHolidays: boolean;
+  excludeWeekends: boolean;
+
+  // 캘린더 반복 주기에서 반복 일자 제외 (반복 주기 날짜 대신 나머지 날에 알람)
+  excludeRepeatDates: boolean;
 
   // 알람음
   soundId: string;          // 'default' | 'bell' | 'digital' | 'gentle'
@@ -57,6 +61,8 @@ export const DEFAULT_ALARM: Omit<Alarm, 'id' | 'createdAt' | 'updatedAt'> = {
   weekdays: [],
   calendarDates: [],
   excludeHolidays: false,
+  excludeWeekends: false,
+  excludeRepeatDates: false,
   soundId: 'default',
   volume: 80,
   vibration: true,

@@ -20,6 +20,7 @@ import { useState } from 'react';
 
 import { Colors } from '@/constants/theme';
 import { useSettingsStore } from '@/src/store/settings-store';
+import LICENSES from '@/src/assets/licenses';
 import { AppSettings, SUPPORTED_COUNTRIES } from '@/src/types/settings';
 import { openBatteryOptimizationSettings } from '@/src/utils/battery-optimization';
 import {
@@ -381,6 +382,7 @@ export default function SettingsScreen() {
 
   const [countryModalVisible, setCountryModalVisible] = useState(false);
   const [criticalAlerts, setCriticalAlerts] = useState(false);
+  const [licensesVisible, setLicensesVisible] = useState(false);
 
   const appVersion = Constants.expoConfig?.version ?? '1.0.0';
 
@@ -447,19 +449,23 @@ export default function SettingsScreen() {
           />
         </View>
 
-        {/* 알림 */}
-        <SectionHeader title={t('settings.notification')} colors={colors} />
-        <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          <ToggleRow
-            icon="notifications-outline"
-            label={t('settings.criticalAlerts')}
-            desc={t('settings.criticalAlertsDesc')}
-            value={criticalAlerts}
-            onValueChange={setCriticalAlerts}
-            colors={colors}
-            isLast
-          />
-        </View>
+        {/* 알림 — Critical Alerts는 iOS 전용 (Android는 STREAM_ALARM으로 이미 처리됨) */}
+        {Platform.OS === 'ios' && (
+          <>
+            <SectionHeader title={t('settings.notification')} colors={colors} />
+            <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <ToggleRow
+                icon="notifications-outline"
+                label={t('settings.criticalAlerts')}
+                desc={t('settings.criticalAlertsDesc')}
+                value={criticalAlerts}
+                onValueChange={setCriticalAlerts}
+                colors={colors}
+                isLast
+              />
+            </View>
+          </>
+        )}
 
         {/* 알람 신뢰도 (Android 전용) */}
         {Platform.OS === 'android' && (
@@ -536,10 +542,15 @@ export default function SettingsScreen() {
             <Text style={[rS.label, { color: colors.text }]}>{t('settings.version')}</Text>
             <Text style={{ color: colors.subText }}>{appVersion}</Text>
           </View>
-          <View style={[rS.row, { borderColor: colors.border, borderBottomWidth: 0 }]}>
+          <TouchableOpacity
+            style={[rS.row, { borderColor: colors.border, borderBottomWidth: 0 }]}
+            onPress={() => setLicensesVisible(true)}
+            activeOpacity={0.7}
+          >
             <Ionicons name="document-text-outline" size={20} color={colors.subText} />
-            <Text style={[rS.label, { color: colors.text }]}>{t('settings.licenses')}</Text>
-          </View>
+            <Text style={[rS.label, { color: colors.text, flex: 1 }]}>{t('settings.licenses')}</Text>
+            <Ionicons name="chevron-forward" size={16} color={colors.subText} />
+          </TouchableOpacity>
         </View>
 
         <Text style={[styles.footer, { color: colors.subText }]}>
@@ -556,6 +567,31 @@ export default function SettingsScreen() {
         colors={colors}
         language={language}
       />
+
+      {/* 오픈소스 라이선스 모달 */}
+      <Modal
+        visible={licensesVisible}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setLicensesVisible(false)}
+      >
+        <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
+          <View style={licStyles.header}>
+            <Text style={[licStyles.title, { color: colors.text }]}>{t('settings.licenses')}</Text>
+            <TouchableOpacity onPress={() => setLicensesVisible(false)} hitSlop={12}>
+              <Ionicons name="close" size={24} color={colors.text} />
+            </TouchableOpacity>
+          </View>
+          <ScrollView
+            style={{ flex: 1 }}
+            contentContainerStyle={licStyles.content}
+          >
+            <Text style={[licStyles.body, { color: colors.subText }]} selectable>
+              {LICENSES}
+            </Text>
+          </ScrollView>
+        </SafeAreaView>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -567,4 +603,19 @@ const styles = StyleSheet.create({
   content: { padding: 16, gap: 8, paddingBottom: 40 },
   card: { borderRadius: 16, borderWidth: 1, overflow: 'hidden', marginBottom: 16 },
   footer: { textAlign: 'center', fontSize: 13, marginTop: 8 },
+});
+
+const licStyles = StyleSheet.create({
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#ccc',
+  },
+  title: { fontSize: 18, fontWeight: '700' },
+  content: { padding: 16, paddingBottom: 40 },
+  body: { fontSize: 11, lineHeight: 18, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' },
 });

@@ -40,6 +40,10 @@
     "repeatMonths": "개월마다",
     "excludeHolidays": "공휴일 제외",
     "excludeHolidaysDesc": "공휴일에는 알람이 울리지 않습니다",
+    "excludeWeekends": "주말 제외",
+    "excludeWeekendsDesc": "토요일, 일요일에는 알람이 울리지 않습니다",
+    "excludeRepeatDates": "반복 일자 제외",
+    "excludeRepeatDatesDesc": "반복 주기 날짜 대신 나머지 날에 알람이 울립니다",
     "sound": "알람음",
     "soundAdd": "+ 파일에서 추가",
     "soundMyFiles": "내 사운드",
@@ -110,6 +114,14 @@
       "15min": "15분",
       "30min": "30분",
       "1hr": "1시간"
+    },
+    "completionSound": "완료 사운드",
+    "sounds": {
+      "none": "없음",
+      "default": "기본",
+      "bell": "벨",
+      "digital": "디지털",
+      "soft": "부드러운"
     }
   },
   "settings": {

@@ -44,16 +44,22 @@ export default function RootLayout() {
     loadSettings();
     loadAlarms();
     requestNotificationPermission();
-    requestBatteryOptimizationOnce();
     // notifee 채널을 앱 시작 시 즉시 생성 (채널이 없으면 fullScreenAction이 동작 안 함)
     if (canUseNotifee()) setupNotifeeChannel();
 
-    // ── 권한 안내: 최초 1회만 표시 ─────────────────────────────────────────
-    // SCHEDULE_EXACT_ALARM (Android 12+) / USE_FULL_SCREEN_INTENT (Android 14+)
+    // ── 권한 안내 순차 실행 ─────────────────────────────────────────────────
+    // 배터리 최적화 → 정확한 알람 → 전체화면 인텐트 순서로 직렬 실행합니다.
+    // 배터리 최적화는 IntentLauncher로 시스템 화면을 열기 때문에
+    // 앱이 잠깐 백그라운드로 전환됩니다. await 없이 실행하면
+    // 이후 Alert.alert 호출이 묻힐 수 있어 순서를 보장합니다.
     if (Platform.OS === 'android' && canUseNotifee()) {
       (async () => {
+        // 1) 배터리 최적화 제외 요청 (시스템 다이얼로그 — 완료 대기)
+        await requestBatteryOptimizationOnce();
+
+        // 2) 정확한 알람 / 전체화면 인텐트 권한 안내 (최초 1회)
         const asked = await AsyncStorage.getItem(ALARM_PERMS_ASKED_KEY);
-        if (asked) return; // 이미 안내했으면 건너뜀
+        if (asked) return;
 
         let shown = false;
 
@@ -91,7 +97,6 @@ export default function RootLayout() {
           });
         }
 
-        // 한 번이라도 안내했으면(또는 해당 Android 버전이 아니면) 키 저장
         if (shown || (!needsExactAlarmPermission() && !needsFullScreenIntentPermission())) {
           await AsyncStorage.setItem(ALARM_PERMS_ASKED_KEY, 'true');
         }
@@ -141,13 +146,16 @@ export default function RootLayout() {
           // fullScreenIntent가 앱을 포그라운드로 전환할 때 이 핸들러가 먼저 실행됩니다.
           // alarm-task(헤드리스 프로세스)의 DELIVERED 비동기 저장이 아직 완료되지 않아
           // pending_alarm_id / alarm_delivered_at이 없을 수 있습니다.
-          // 플래그가 없으면 500ms 대기 후 1회 재확인합니다.
+          // 250ms 간격으로 최대 6회(총 1.5초) 재확인합니다.
           let deliveredAt = await AsyncStorage.getItem('alarm_delivered_at');
           let pendingId = await AsyncStorage.getItem('pending_alarm_id');
           if (!deliveredAt || !pendingId) {
-            await new Promise<void>((r) => setTimeout(r, 500));
-            deliveredAt = await AsyncStorage.getItem('alarm_delivered_at');
-            pendingId = await AsyncStorage.getItem('pending_alarm_id');
+            for (let i = 0; i < 6; i++) {
+              await new Promise<void>((r) => setTimeout(r, 250));
+              deliveredAt = await AsyncStorage.getItem('alarm_delivered_at');
+              pendingId = await AsyncStorage.getItem('pending_alarm_id');
+              if (deliveredAt && pendingId) break;
+            }
           }
 
           if (deliveredAt && pendingId) {

@@ -40,6 +40,10 @@
     "repeatMonths": "month(s)",
     "excludeHolidays": "Exclude Holidays",
     "excludeHolidaysDesc": "Alarm won't ring on holidays",
+    "excludeWeekends": "Exclude Weekends",
+    "excludeWeekendsDesc": "Alarm will not ring on Saturdays and Sundays",
+    "excludeRepeatDates": "Exclude Repeat Dates",
+    "excludeRepeatDatesDesc": "Alarm rings on non-repeat days instead of repeat cycle dates",
     "sound": "Sound",
     "soundAdd": "+ Add from file",
     "soundMyFiles": "My Sounds",
@@ -110,6 +114,14 @@
       "15min": "15 min",
       "30min": "30 min",
       "1hr": "1 hr"
+    },
+    "completionSound": "Completion Sound",
+    "sounds": {
+      "none": "None",
+      "default": "Default",
+      "bell": "Bell",
+      "digital": "Digital",
+      "soft": "Soft"
     }
   },
   "settings": {

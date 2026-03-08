@@ -13,7 +13,7 @@ import {
 import { useState, useRef, useEffect } from 'react';
 import * as Battery from 'expo-battery';
 import { useTranslation } from 'react-i18next';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Notifications from 'expo-notifications';
 import * as Haptics from 'expo-haptics';
 import { Ionicons } from '@expo/vector-icons';
@@ -40,7 +40,7 @@ async function checkBatteryAndStart(onStart: () => void): Promise<void> {
   try {
     const level = await Battery.getBatteryLevelAsync();
     // level: 0.0~1.0, -1이면 정보 없음(시뮬레이터 등)
-    if (level >= 0 && level < 0.99) { // TODO: 테스트용 99%, 실제 배포 시 0.05로 변경
+    if (level >= 0 && level < 0.05) {
       Alert.alert(
         '배터리 부족',
         `배터리 잔량이 ${Math.round(level * 100)}%입니다.\n화면 켜짐 유지를 사용하면 배터리가 더 빨리 소모됩니다.`,
@@ -144,11 +144,21 @@ const TIMER_SOUND_SOURCES: Record<string, any> = {
   soft:    require('@/assets/sounds/alarm_soft.mp3'),
 };
 
+// 이전 정지 타임아웃 ID 추적 — 새 사운드 재생 전 취소하기 위해 모듈 레벨에서 관리
+let _soundStopTimeout: ReturnType<typeof setTimeout> | null = null;
+
 async function playTimerSound(soundId: string, durationSec: number): Promise<void> {
   if (soundId === 'none') return;
   const source = TIMER_SOUND_SOURCES[soundId];
   if (!source) return;
   try {
+    // 이전 구간에서 예약된 정지 타임아웃이 아직 남아있으면 취소
+    // (이전 구간 사운드 시간 > 현재 구간 시간인 경우 이전 stopAlarmNative가 현재 사운드를 꺼버리는 버그 방지)
+    if (_soundStopTimeout !== null) {
+      clearTimeout(_soundStopTimeout);
+      _soundStopTimeout = null;
+    }
+
     // Android: STREAM_ALARM으로 재생 — 무음/진동 모드에서도 알람 볼륨이 0이 아니면 재생됨
     if (isNativeAlarmAudioAvailable()) {
       const asset = Asset.fromModule(source as number);
@@ -157,7 +167,10 @@ async function playTimerSound(soundId: string, durationSec: number): Promise<voi
       if (uri) {
         await playAlarmNative(uri, 1.0);
         // durationSec 후 네이티브 오디오 정지
-        setTimeout(() => { stopAlarmNative(); }, durationSec * 1000);
+        _soundStopTimeout = setTimeout(() => {
+          stopAlarmNative();
+          _soundStopTimeout = null;
+        }, durationSec * 1000);
         return;
       }
     }
@@ -171,19 +184,20 @@ async function playTimerSound(soundId: string, durationSec: number): Promise<voi
     const player = createAudioPlayer(source);
     player.loop = true;
     player.play();
-    setTimeout(() => {
+    _soundStopTimeout = setTimeout(() => {
       try { player.pause(); player.remove(); } catch {}
+      _soundStopTimeout = null;
     }, durationSec * 1000);
   } catch {}
 }
 
 type TimerSoundId = 'none' | 'default' | 'bell' | 'digital' | 'soft';
-const SOUND_OPTIONS: { id: TimerSoundId; labelKo: string; icon: string }[] = [
-  { id: 'none',    labelKo: '없음',    icon: 'volume-mute-outline' },
-  { id: 'default', labelKo: '기본',    icon: 'musical-notes-outline' },
-  { id: 'bell',    labelKo: '벨',      icon: 'notifications-outline' },
-  { id: 'digital', labelKo: '디지털', icon: 'pulse-outline' },
-  { id: 'soft',    labelKo: '부드러운', icon: 'leaf-outline' },
+const SOUND_OPTIONS: { id: TimerSoundId; icon: string }[] = [
+  { id: 'none',    icon: 'volume-mute-outline' },
+  { id: 'default', icon: 'musical-notes-outline' },
+  { id: 'bell',    icon: 'notifications-outline' },
+  { id: 'digital', icon: 'pulse-outline' },
+  { id: 'soft',    icon: 'leaf-outline' },
 ];
 
 /* ─── Normal Timer ─── */
@@ -288,7 +302,7 @@ function NormalTimer({ colors }: { colors: typeof Colors.light }) {
 
           {/* 사운드 선택 */}
           <View style={{ marginBottom: 14 }}>
-            <Text style={[ntStyles.soundLabel, { color: colors.subText }]}>완료 사운드</Text>
+            <Text style={[ntStyles.soundLabel, { color: colors.subText }]}>{t('timer.completionSound')}</Text>
             <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
@@ -311,7 +325,7 @@ function NormalTimer({ colors }: { colors: typeof Colors.light }) {
                       color={active ? '#6B6BA8' : colors.subText}
                     />
                     <Text style={[ntStyles.soundChipText, { color: active ? '#6B6BA8' : colors.subText }]}>
-                      {opt.labelKo}
+                      {t(`timer.sounds.${opt.id}`)}
                     </Text>
                   </TouchableOpacity>
                 );
@@ -413,6 +427,7 @@ function SlotTimeModal({
   onClose: () => void;
 }) {
   const { t } = useTranslation();
+  const insets = useSafeAreaInsets();
   const [h, setH] = useState(slot?.hours ?? 0);
   const [m, setM] = useState(slot?.minutes ?? 0);
   const [s, setS] = useState(slot?.seconds ?? 0);
@@ -425,7 +440,7 @@ function SlotTimeModal({
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <TouchableOpacity style={smStyles.backdrop} activeOpacity={1} onPress={onClose} />
-      <View style={[smStyles.sheet, { backgroundColor: colors.card }]}>
+      <View style={[smStyles.sheet, { backgroundColor: colors.card, paddingBottom: 20 + insets.bottom }]}>
         {/* 핸들 */}
         <View style={[smStyles.handle, { backgroundColor: colors.border }]} />
         <Text style={[smStyles.title, { color: colors.text }]}>{t('timer.setTime')}</Text>

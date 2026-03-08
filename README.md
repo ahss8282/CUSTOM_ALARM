@@ -195,3 +195,11 @@ npm run generate-licenses
 | Phase 4 | Android 알람 신뢰도 강화 (fullScreenIntent, WakeLock, 커스텀 알람음) |
 | Phase 5 | 타이머 배터리 경고, 예정 알람 알림(30분 전 + '지금 해제') |
 | Phase 6 | 주말 제외, 캘린더 반복 주기, 반복 일자 제외, 공휴일 카드 UI 반영 |
+
+### 버그 수정 이력 (Phase 6 이후)
+
+| 항목 | 원인 | 수정 내용 |
+|------|------|---------|
+| 캘린더 알람 날짜 1일 오차 | `toISOString()`이 UTC 기준 날짜를 반환해 KST(UTC+9) 환경에서 날짜 비교 불일치 발생 | `src/utils/date-utils.ts` 신규 생성 (`toLocalDateString`, `parseLocalDate`), 관련 코드 전체 교체 (notification-notifee.ts 9곳, alarm-task.ts 2곳, holiday.ts 1곳, index.tsx 8곳) |
+| 운동 타이머 하단 확인 버튼 네비게이션 바 겹침 | 바텀 시트 하단 패딩이 Safe Area를 미반영 | `useSafeAreaInsets().bottom`만큼 `paddingBottom` 추가 |
+| 운동 타이머 연속 구간 사운드 조기 종료 | 이전 구간 사운드의 `stopAlarmNative` 타임아웃이 다음 구간 재생 중 만료되어 소리를 꺼버림 | 모듈 레벨 `_soundStopTimeout`으로 이전 타임아웃을 추적, 새 사운드 재생 전 `clearTimeout`으로 취소 |
